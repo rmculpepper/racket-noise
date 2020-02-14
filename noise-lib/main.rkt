@@ -346,8 +346,8 @@
     (let ()
       (-mix-hash prologue)
       ;; call mix-hash for each public key in pre-messages
-      (define (handle-pre-message shape)
-        (for ([sym (in-list (cdr shape))])
+      (define (handle-pre-message mp)
+        (for ([sym (in-list (message-pattern-tokens mp))])
           (define pk (case sym [(s) s] [(e) e] [(rs) rs] [(re) re] [else 'skip]))
           (unless (eq? pk 'skip)
             (define pk-bytes
@@ -356,6 +356,10 @@
                     [(bytes? pk) pk]
                     [else (error 'initialize-handshake "missing key: ~e" sym)]))
             (-mix-hash pk-bytes))))
+
+
+      ;; FIXME
+
       (set! pattern
             (let loop ([pattern pattern])
               (cond [(eq? (car pattern) PATTERN-SEP)
