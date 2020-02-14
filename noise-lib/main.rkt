@@ -317,10 +317,6 @@
 
 ;; ----------------------------------------
 
-;; MsgSymbol = (U 'e 's 'ee 'es 'se 'ss)
-;; MsgPattern = (cons (U '<- '->) (Listof MsgSymbol))
-;; HandshakePattern = (Listof MsgPattern) ++ (list '...) ++ (Listof MsgPattern)
-
 (define handshake-state%
   (class object%
     (init-field crypto)     ;; crypto%
