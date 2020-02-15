@@ -26,7 +26,7 @@
      (define pk (single "PK algorithm" pks pk-mapping))
      (define ci (single "cipher" cis cipher-mapping))
      (define di (single "digest algorithm" dis digest-mapping))
-     (list (string->symbol pattern) (map string->symbol exts) pk ci di)]
+     (list (string->symbol pattern) exts pk ci di)]
     [v (error 'noise-protocol "bad protocol name: ~e => ~e" str v)]))
 
 (define pk-mapping

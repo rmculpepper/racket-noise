@@ -6,7 +6,9 @@
 
 (crypto-factories nettle-factory)
 
-(define p (noise-protocol "Noise_NN_25519_ChaChaPoly_SHA512"))
+(define p (noise-protocol "Noise_NNpsk0_25519_ChaChaPoly_SHA512"))
+
+(define psk (crypto-random-bytes 32))
 
 (define alice-sk (send p generate-private-key))
 (define alice-pub-bytes (send p pk->public-bytes alice-sk))
@@ -14,8 +16,8 @@
 (define bob-sk (send p generate-private-key))
 (define bob-pub-bytes (send p pk->public-bytes bob-sk))
 
-(define alice (send p new-initiator #:s alice-sk #:rs bob-pub-bytes))
-(define bob (send p new-responder #:s bob-sk))
+(define alice (send p new-initiator #:s alice-sk #:rs bob-pub-bytes (hash 'psk psk)))
+(define bob (send p new-responder #:s bob-sk (hash 'psk psk)))
 
 (define msg1 (send alice write-handshake-message #"hello"))
 (send bob read-handshake-message msg1)

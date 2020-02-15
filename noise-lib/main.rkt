@@ -102,15 +102,19 @@
 
 (define protocol%
   (class object%
-    (init-field crypto pattern protocol-name)
+    (init-field crypto pattern protocol-name [extensions '()])
     (super-new)
 
     (define/public (get-crypto) crypto)
     (define/public (get-pattern) pattern)
     (define/public (get-protocol-name) protocol-name)
+    (define/public (get-extensions) extensions)
 
-    (define/public (new-party initiator? [info #hasheq()]
-                              #:s [s #f] #:rs [rs #f])
+    (define/public (using-psk?)
+      (for/or ([ext (in-list extensions)])
+        (regexp-match? #rx"^psk[0-9]+$" ext)))
+
+    (define/public (new-party initiator? [info '#hash()] #:s [s #f] #:rs [rs #f])
       (let* ([s (if (bytes? s) (bytes->private-key s) s)]
              [info (if s  (hash-set info 's  s)  info)]
              [info (if rs (hash-set info 'rs rs) info)])
@@ -140,14 +144,17 @@
     (cond [(string? name) name]
           [(symbol? name) (symbol->string name)]))
   (match (parse-protocol protocol-name)
-    [(list pattern-name '() pk ci di)
+    [(list pattern-name exts pk ci di)
      (define crypto (make-crypto di ci pk #:factories factories))
-     (define pattern
+     (define base-pattern
        (or (hash-ref handshake-table pattern-name #f)
            (error 'noise-protocol "unknown handshake pattern\n  protocol: ~e" name)))
+     (define pattern
+       (for/fold ([pattern base-pattern]) ([ext (in-list exts)])
+         (handshake-pattern-apply-extension pattern ext)))
      (new protocol%
           (protocol-name (bytes->immutable-bytes (string->bytes/utf-8 protocol-name)))
-          (crypto crypto) (pattern pattern))]))
+          (crypto crypto) (pattern pattern) (extensions exts))]))
 
 ;; ----------------------------------------
 
@@ -257,12 +264,9 @@
 
 (define handshake-state%
   (class object%
-    (init-field crypto)     ;; crypto%
+    (init protocol)         ;; protocol%
     (init-field initiator?) ;; Boolean
-    (init pattern)          ;; HandshakePattern
-    (init protocol-name)    ;; Bytes -- FIXME: determines pattern, etc?
-    (init [info '#hash()])  ;; Hash[...]
-    (init [prologue #""])   ;; Bytes
+    (init-field [info '#hash()])  ;; Hash[...]
 
     ;; Static keys of self and peer
     (field [s  (hash-ref info 's  #f)]) ;; private-key? or #f
@@ -272,17 +276,28 @@
     (field [e  (hash-ref info 'e  #f)]) ;; private-key? or #f
     (field [re (hash-ref info 're #f)]) ;; bytes or #f
 
-    ;; State
-    (field [mpatterns (handshake-pattern-msgs pattern)]) ;; (Listof MessagePattern), mutated
-    (field [sstate (new symmetric-state% (crypto crypto) (protocol-name protocol-name))])
+    (define crypto (send protocol get-crypto))
+    (define mpatterns ;; (Listof MessagePattern), mutated
+      (handshake-pattern-msgs (send protocol get-pattern)))
+    (define sstate    ;; symmetric-state%
+      (new symmetric-state% (crypto crypto)
+           (protocol-name (send protocol get-protocol-name))))
+
+    (define using-psk? (send protocol using-psk?))
+    (define/private (get-psk)
+      (cond [(hash-ref info 'psk #f)
+             => (lambda (psk)
+                  (cond [(procedure? psk) (psk rs)]
+                        [else psk]))]
+            [else #f]))
 
     (super-new)
 
     ;; --------------------
     ;; Initialization
 
-    (-mix-hash prologue)
-    (for ([mp (in-list (handshake-pattern-pre pattern))]
+    (-mix-hash (hash-ref info 'prologue #""))
+    (for ([mp (in-list (handshake-pattern-pre (send protocol get-pattern)))]
           #:when (eq? (message-pattern-dir mp) (direction 'read)))
       (for ([sym (in-list (message-pattern-tokens mp))])
         (define pk (case sym [(s) s] [(e) e] [(rs) rs] [(re) re] [else 'skip]))
@@ -352,7 +367,9 @@
          (set! e (send crypto generate-private-key))
          (define e-pub (send crypto pk->public-bytes e))
          (write-bytes e-pub out)
-         (-mix-hash e-pub)]
+         (-mix-hash e-pub)
+         (when using-psk?
+           (-mix-key e-pub))]
         [(s)
          (unless s (error who "static key not set"))
          (define s-pub (send crypto pk->public-bytes s))
@@ -362,6 +379,9 @@
         [(es) (if initiator? (do-dh e rs) (do-dh s re))]
         [(se) (if initiator? (do-dh s re) (do-dh e rs))]
         [(ss) (do-dh s rs)]
+        [(psk)
+         (cond [(get-psk) => (lambda (psk) (-mix-key-and-hash psk))]
+               [else (error who "could not get pre-shared key")])]
         [else (error who "internal error: unknown token: ~e" sym)]))
 
     ;; --------------------
@@ -388,7 +408,9 @@
       (case sym
         [(e)
          (set! re (read-bytes* DHLEN msg-in))
-         (-mix-hash re)]
+         (-mix-hash re)
+         (when using-psk?
+           (-mix-key re))]
         [(s)
          (when rs (error who "peer static key already set"))
          (define enc-rs
@@ -399,6 +421,9 @@
         [(es) (if initiator? (do-dh e rs) (do-dh s re))]
         [(se) (if initiator? (do-dh s re) (do-dh e rs))]
         [(ss) (do-dh s rs)]
+        [(psk)
+         (cond [(get-psk) => (lambda (psk) (-mix-key-and-hash psk))]
+               [else (error who "could not get pre-shared key")])]
         [else (error who "internal error: unknown token: ~e" sym)]))
 
     ;; --------------------
@@ -408,6 +433,8 @@
       (send sstate mix-hash data))
     (define/private (-mix-key data)
       (send sstate mix-key data))
+    (define/private (-mix-key-and-hash data)
+      (send sstate mix-key-and-hash data))
     (define/private (-encrypt-and-hash ptext)
       (send sstate encrypt-and-hash ptext))
     (define/private (-decrypt-and-hash ctext)
@@ -425,12 +452,7 @@
     (init protocol initiator? info)
 
     (define hstate ;; #f or handshake-state%, mutated
-      (new handshake-state%
-           (crypto (send protocol get-crypto))
-           (protocol-name (send protocol get-protocol-name))
-           (pattern (send protocol get-pattern))
-           (initiator? initiator?)
-           (info info)))
+      (new handshake-state% (protocol protocol) (initiator? initiator?) (info info)))
     (define tstate-w #f) ;; #f or cipher-state%, mutated
     (define tstate-r #f) ;; #f or cipher-state%, mutated
     (define hhash #f)    ;; #f or bytes, mutated

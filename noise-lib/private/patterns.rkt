@@ -233,6 +233,18 @@
     (values name pattern)))
 
 ;; ----------------------------------------
+;; Extensions
+
+;; handshake-pattern-apply-extension : HandshakePattern String -> HandshakePattern
+(define (handshake-pattern-apply-extension hp ext)
+  (cond [(equal? ext "fallback")
+         (fallback-handshake-pattern hp)]
+        [(regexp-match #rx"^psk([0-9]+)$" ext)
+         => (lambda (m) (pskN-handshake-pattern (string->number (cadr m)) hp))]
+        [else
+         (error 'handshake-pattern-apply-extension "unknown extension: ~e" ext)]))
+
+;; ----------------------------------------
 ;; PSK extension
 
 ;; pskN-handshake-pattern : Nat HandshakePattern -> HandshakePattern
