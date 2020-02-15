@@ -297,17 +297,25 @@
     ;; Initialization
 
     (-mix-hash (hash-ref info 'prologue #""))
-    (for ([mp (in-list (handshake-pattern-pre (send protocol get-pattern)))]
-          #:when (eq? (message-pattern-dir mp) (direction 'read)))
-      (for ([sym (in-list (message-pattern-tokens mp))])
-        (define pk (case sym [(s) s] [(e) e] [(rs) rs] [(re) re] [else 'skip]))
-        (unless (eq? pk 'skip)
-          (define pk-bytes
-            (cond [(private-key? pk)
-                   (send crypto pk->public-bytes pk)]
-                  [(bytes? pk) pk]
-                  [else (error 'initialize-handshake "missing key: ~e" sym)]))
-          (-mix-hash pk-bytes))))
+    (let ([pre (handshake-pattern-pre (send protocol get-pattern))])
+      (define (process-pre same-side? mp)
+        (for ([sym (in-list (message-pattern-tokens mp))])
+          (define pk (get-pk same-side? sym))
+          (unless (eq? pk 'skip)
+            (define pk-bytes
+              (cond [(private-key? pk) (send crypto pk->public-bytes pk)]
+                    [(bytes? pk) pk]
+                    [else (error 'initialize-handshake "missing key: ~e" sym)]))
+            (-mix-hash pk-bytes))))
+      (define (get-pk same-side? sym)
+        (if same-side?
+            (case sym [(s)  s] [(e)  e] [(rs) rs] [(re) re] [else 'skip])
+            (case sym [(s) rs] [(e) re] [(rs)  s] [(re)  e] [else 'skip])))
+      (define ((has-dir? dir) mp) (eq? (message-pattern-dir mp) dir))
+      (for ([mp (in-list (filter (has-dir? '->) pre))])
+        (process-pre initiator? mp))
+      (for ([mp (in-list (filter (has-dir? '<-) pre))])
+        (process-pre (not initiator?) mp)))
 
     ;; --------------------
 
@@ -346,6 +354,7 @@
     (define/public (write-handshake-message payload)
       (define who 'write-handshake-message)
       (define mp (next-message-pattern who 'write))
+      ;; (eprintf "WRITE ~v\n" mp)
       (define out (open-output-bytes))
       (-write-message:pattern who mp out)
       (define enc-payload (-encrypt-and-hash payload))
@@ -390,6 +399,7 @@
     (define/public (read-handshake-message msg)
       (define who 'read-handshake-message)
       (define mp (next-message-pattern who 'read))
+      ;; (eprintf "READ  ~v\n" mp)
       (define msg-in (open-input-bytes msg))
       (-read-message:pattern who mp msg-in)
       (define enc-payload (port->bytes msg-in))

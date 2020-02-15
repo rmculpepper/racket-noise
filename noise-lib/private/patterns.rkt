@@ -36,11 +36,7 @@
   ;; confidentiality properties. Numbers are specified in Section 7.7 (rev 34).
   (struct secprop (auth-level conf-level) #:transparent)
 
-  ;; handshake-pattern-{pre,t}/dir : HandshakePattern Direction -> MessagePattern
-  (define (handshake-pattern-pre/dir hp dir)
-    (for/first ([mp (in-list (handshake-pattern-pre hp))]
-                #:when (eq? (message-pattern-dir mp) dir))
-      mp))
+  ;; handshake-pattern-t/dir : HandshakePattern Direction -> MessagePattern
   (define (handshake-pattern-t/dir hp dir)
     (case dir
       [(->) (handshake-pattern-t-> hp)]

@@ -6,7 +6,10 @@
 
 (crypto-factories nettle-factory)
 
-(define p (noise-protocol "Noise_NNpsk0_25519_ChaChaPoly_SHA512"))
+;; (define p (noise-protocol "Noise_NN_25519_ChaChaPoly_SHA512"))
+;; (define p (noise-protocol "Noise_NK_25519_ChaChaPoly_SHA512"))
+;; (define p (noise-protocol "Noise_NNpsk0_25519_ChaChaPoly_SHA512"))
+(define p (noise-protocol "Noise_NN_25519_ChaChaPoly_SHA512"))
 
 (define psk (crypto-random-bytes 32))
 
