@@ -7,6 +7,7 @@
          crypto
          (prefix-in crypto: crypto)
          binaryio/bytes
+         "private/interfaces.rkt"
          "private/patterns.rkt"
          "private/protocol-name.rkt")
 (provide (all-defined-out))
@@ -17,7 +18,6 @@
 ;; ----------------------------------------
 ;; Crypto support
 
-(define DHLEN 32)   ;; length of public key
 (define KEYLEN 32)  ;; length of symmetric key
 (define AUTHLEN 16) ;; length of auth tag
 (define NONCELEN 8) ;; length of nonce
@@ -25,20 +25,17 @@
 (define Z32 #"\0\0\0\0")
 
 (define crypto%
-  (class object%
+  (class* object% (crypto<%>)
     (init-field ds cs pk)
     (init factories)
     (super-new)
 
     (field [di (or (get-digest ds factories) (fail "digest" ds))]
            [ci (or (get-cipher cs factories) (fail "cipher" cs))]
-           [pkp (with-handlers ([exn:fail? (lambda () (fail "PK" pk))])
+           [pkp (with-handlers ([exn:fail? (lambda (e) (fail "PK" pk))])
                   (parameterize ((crypto-factories factories))
                     (generate-pk-parameters (car pk) (cdr pk))))]
            [hkdfi (or (get-kdf `(hkdf ,ds) factories) (fail "KDF" `(hkdf ,ds)))])
-
-    (define big-endian-nonce?
-      (case (car cs) [(aes) #t] [(chacha20-poly1305) #f] [else #f]))
 
     (define/private (fail what spec)
       (error 'crypto% "unable to get implementation\n  ~a: ~v" what spec))
@@ -55,6 +52,11 @@
              (for/list ([i (in-range n)])
                (subbytes km (* i HASHLEN) (* (add1 i) HASHLEN)))))
 
+    ;; ----
+
+    (define big-endian-nonce?
+      (case (car cs) [(aes) #t] [(chacha20-poly1305) #f] [else #f]))
+
     (define/public (nonce->bytes n)
       (bytes-append Z32 (integer->integer-bytes n 8 #f big-endian-nonce?)))
 
@@ -68,6 +70,16 @@
       (define nonce (make-bytes NONCELEN #xFF))
       (define zeros (make-bytes KEYLEN 0))
       (set! k (subbytes (encrypt k nonce #"" zeros) 0 KEYLEN)))
+
+    ;; ----
+
+    (define DHLEN ;; length of public key and shared secret
+      (match pk
+        ['(ecx (curve x25519)) 32]
+        ['(ecx (curve x448)) 56]
+        [_ (error 'crypto% "unknown PK algorithm: ~e" pk)]))
+
+    (define/public (get-dhlen) DHLEN)
 
     (define/public (generate-private-key)
       (crypto:generate-private-key pkp null))
@@ -101,7 +113,7 @@
 ;; Noise protocols by name
 
 (define protocol%
-  (class object%
+  (class* object% (protocol<%>)
     (init-field crypto pattern protocol-name [extensions '()])
     (super-new)
 
@@ -114,16 +126,16 @@
       (for/or ([ext (in-list extensions)])
         (regexp-match? #rx"^psk[0-9]+$" ext)))
 
-    (define/public (new-party initiator? [info '#hash()] #:s [s #f] #:rs [rs #f])
+    (define/public (new-connection initiator? [info '#hash()] #:s [s #f] #:rs [rs #f])
       (let* ([s (if (bytes? s) (bytes->private-key s) s)]
              [info (if s  (hash-set info 's  s)  info)]
              [info (if rs (hash-set info 'rs rs) info)])
         (new connection% (protocol this) (initiator? initiator?) (info info))))
 
     (define/public (new-initiator [info #hasheq()] #:s [s #f] #:rs [rs #f])
-      (new-party #t info #:s s #:rs rs))
+      (new-connection #t info #:s s #:rs rs))
     (define/public (new-responder [info #hasheq()] #:s [s #f] #:rs [rs #f])
-      (new-party #f info #:s s #:rs rs))
+      (new-connection #f info #:s s #:rs rs))
 
     ;; --------------------
 
@@ -159,7 +171,7 @@
 ;; ----------------------------------------
 
 (define cipher-state%
-  (class object%
+  (class* object% (cipher-state<%>)
     (init-field crypto)
     (field [k #f]) ;; #f or bytes[KEYLEN]
     (field [n 0])  ;; exact-nonnegative-integer
@@ -197,7 +209,7 @@
 ;; ----------------------------------------
 
 (define symmetric-state%
-  (class object%
+  (class* object% (symmetric-state<%>)
     (init protocol-name) ;; Bytes
     (init-field crypto)  ;; crypto%
     (super-new)
@@ -263,7 +275,7 @@
 ;; ----------------------------------------
 
 (define handshake-state%
-  (class object%
+  (class* object% (handshake-state<%>)
     (init protocol)         ;; protocol%
     (init-field initiator?) ;; Boolean
     (init-field [info '#hash()])  ;; Hash[...]
@@ -417,14 +429,14 @@
         (-mix-key (send crypto dh sk pk)))
       (case sym
         [(e)
-         (set! re (read-bytes* DHLEN msg-in))
+         (set! re (read-bytes* (send crypto get-dhlen) msg-in))
          (-mix-hash re)
          (when using-psk?
            (-mix-key re))]
         [(s)
          (when rs (error who "peer static key already set"))
          (define enc-rs
-           (let ([len (+ DHLEN (if (-has-key?) AUTHLEN 0))])
+           (let ([len (+ (send crypto get-dhlen) (if (-has-key?) AUTHLEN 0))])
              (read-bytes* len msg-in)))
          (set! rs (-decrypt-and-hash enc-rs))]
         [(ee) (do-dh e re)]
@@ -458,7 +470,7 @@
 ;; Connection
 
 (define connection%
-  (class object%
+  (class* object% (connection<%>)
     (init protocol initiator? info)
 
     (define hstate ;; #f or handshake-state%, mutated
