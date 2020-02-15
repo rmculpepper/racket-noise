@@ -33,7 +33,8 @@
     (field [di (or (get-digest ds factories) (fail "digest" ds))]
            [ci (or (get-cipher cs factories) (fail "cipher" cs))]
            [pkp (with-handlers ([exn:fail? (lambda () (fail "PK" pk))])
-                  (generate-pk-parameters (car pk) (cdr pk)))]
+                  (parameterize ((crypto-factories factories))
+                    (generate-pk-parameters (car pk) (cdr pk))))]
            [hkdfi (or (get-kdf `(hkdf ,ds) factories) (fail "KDF" `(hkdf ,ds)))])
 
     (define big-endian-nonce?
@@ -134,19 +135,13 @@
 
 ;; ----------------------------------------
 
-;; 25519, 448
-;; ChaChaPoly, AESGCM
-;;   ChaChaPoly: 96-bit nonce is 32 zero bits + LE(n), or 64-bit nonce is LE(n)
-;;   AESGCM: 96-bit nonce is 32 zero bits + BE(n)
-;; SHA256, SHA512, BLAKE2s, BLAKE2b
-
-(define (noise-protocol name)
+(define (noise-protocol name #:factories [factories (crypto-factories)])
   (define protocol-name
     (cond [(string? name) name]
           [(symbol? name) (symbol->string name)]))
   (match (parse-protocol protocol-name)
     [(list pattern-name '() pk ci di)
-     (define crypto (make-crypto di ci pk #:factories (crypto-factories)))
+     (define crypto (make-crypto di ci pk #:factories factories))
      (define pattern
        (or (hash-ref handshake-table pattern-name #f)
            (error 'noise-protocol "unknown handshake pattern\n  protocol: ~e" name)))
