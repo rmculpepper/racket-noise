@@ -7,7 +7,8 @@
          crypto
          (prefix-in crypto: crypto)
          binaryio/bytes
-         "private/patterns.rkt")
+         "private/patterns.rkt"
+         "private/protocol-name.rkt")
 (provide (all-defined-out))
 
 ;; Reference: http://www.noiseprotocol.org/noise.html
@@ -153,62 +154,6 @@
     [(? symbol? protocol)
      (mk (parse-protocol (symbol->string protocol)))]))
 
-(define noise-protocol-rx
-  (let ([algs-rx "([a-zA-Z0-9/]+(?:[+][a-zA-Z0-9/]+)*)"])
-    (regexp (string-append
-             "Noise_"
-             "([A-Z0-9]+)" ;; pattern
-             "([a-z0-9]+(?:[+][a-z0-9]+)*)?" ;; pattern extensions
-             "_" algs-rx ;; pk algs
-             "_" algs-rx ;; cipher algs
-             "_" algs-rx ;; digest algs
-             ))))
-
-(define (parse-protocol str)
-  (define (split s) (string-split s #rx"[+]" #:trim? #f))
-  (define (single what s mapping)
-    (match (split s)
-      [(list v) (noise->crypto 'noise-protocol v mapping what)]
-      [_ (error 'noise-protocol "multiple ~as unsupported\n  protocol: ~e" what str)]))
-  (match (regexp-match noise-protocol-rx str)
-    [(list _ pattern ext pks cis dis)
-     (define exts (split (or ext "")))
-     (define pk (single "PK algorithm" pks pk-mapping))
-     (define ci (single "cipher" cis cipher-mapping))
-     (define di (single "digest algorithm" dis digest-mapping))
-     (list (string->symbol pattern) (map string->symbol exts) pk ci di)]
-    [v (error 'noise-protocol "bad protocol name: ~e => ~e" str v)]))
-
-(define pk-mapping
-  '(["25519" (ecx . ((curve x25519)))]
-    ["448"   (ecx . ((curve x448)))]))
-
-(define cipher-mapping
-  '(["ChaChaPoly" (chacha20-poly1305 stream)]
-    ["AESGCM"     (aes gcm)]))
-
-(define digest-mapping
-  '(["SHA256" sha256]
-    ["SHA512" sha512]
-    ["BLAKE2s" blake2s-256]
-    ["BLAKE2b" blake2b-512]))
-
-(define (noise->crypto who name mapping what)
-  (cond [(assoc name mapping) => cadr]
-        [else (error who "unknown Noise ~a name: ~e" what name)]))
-
-(define (crypto->noise who spec mapping what)
-  (cond [(assoc spec (map reverse mapping)) => cadr] ;; FIXME?
-        [else (error who "cannot translate to Noise ~a name: ~e" what spec)]))
-
-(define (make-protocol-name pattern exts pk ci di)
-  (define who 'make-protocol-name)
-  (format "Noise_~a~a_~a_~a_~a"
-          pattern (string-join (map ~a exts) "+")
-          (crypto->noise who pk pk-mapping "PK algorithm")
-          (crypto->noise who ci cipher-mapping "cipher")
-          (crypto->noise who di digest-mapping "digest")))
-
 ;; ----------------------------------------
 
 (define cipher-state%
@@ -300,11 +245,11 @@
 
     (define/public (split)
       (define-values (tmp-k1 tmp-k2) (send crypto hkdf-n ck #"" 2))
-      (define cs1 (new cipher-state% (crypto crypto)))
-      (send cs1 initialize-key (subbytes tmp-k1 0 KEYLEN))
-      (define cs2 (new cipher-state% (crypto crypto)))
-      (send cs2 initialize-key (subbytes tmp-k2 0 KEYLEN))
-      (values cs1 cs2))
+      (define cs-> (new cipher-state% (crypto crypto)))
+      (send cs-> initialize-key (subbytes tmp-k1 0 KEYLEN))
+      (define cs<- (new cipher-state% (crypto crypto)))
+      (send cs<- initialize-key (subbytes tmp-k2 0 KEYLEN))
+      (values cs-> cs<-))
 
     ;; --------------------
     ;; Forwarded methods
@@ -320,7 +265,7 @@
 (define handshake-state%
   (class object%
     (init-field crypto)     ;; crypto%
-    (init-field pattern)    ;; HandshakePattern, mutated
+    (init-field pattern)    ;; HandshakePattern
     (init-field initiator?) ;; Boolean
     (init protocol-name)    ;; Bytes -- FIXME: determines pattern, etc?
 
@@ -335,75 +280,101 @@
     ;; Prologue
     (init [prologue #""]) ;; Bytes
 
+    ;; State
+    (define mpatterns null) ;; (Listof MessagePattern), mutated
     (define symmetric-state
       (new symmetric-state% (crypto crypto) (protocol-name protocol-name)))
+    (define tstate-w #f) ;; #f or cipher-state%, mutated
+    (define tstate-r #f) ;; #f or cipher-state%, mutated
+    (define hhash #f)    ;; #f or bytes, mutated
 
     (super-new)
 
     ;; --------------------
     ;; Initialization
 
-    (let ()
-      (-mix-hash prologue)
-      ;; call mix-hash for each public key in pre-messages
-      (define (handle-pre-message mp)
-        (for ([sym (in-list (message-pattern-tokens mp))])
-          (define pk (case sym [(s) s] [(e) e] [(rs) rs] [(re) re] [else 'skip]))
-          (unless (eq? pk 'skip)
-            (define pk-bytes
-              (cond [(private-key? pk)
-                     (send crypto pk->public-bytes pk)]
-                    [(bytes? pk) pk]
-                    [else (error 'initialize-handshake "missing key: ~e" sym)]))
-            (-mix-hash pk-bytes))))
-
-
-      ;; FIXME
-
-      (set! pattern
-            (let loop ([pattern pattern])
-              (cond [(eq? (car pattern) PATTERN-SEP)
-                     (cdr pattern)]
-                    [else
-                     (handle-pre-message (car pattern))
-                     (loop (cdr pattern))]))))
+    (-mix-hash prologue)
+    (match pattern
+      [(handshake-pattern pre mps _ _)
+       (for ([mp (in-list pre)] #:when (eq? (message-pattern-dir mp) (direction 'read)))
+         (for ([sym (in-list (message-pattern-tokens mp))])
+           (define pk (case sym [(s) s] [(e) e] [(rs) rs] [(re) re] [else 'skip]))
+           (unless (eq? pk 'skip)
+             (define pk-bytes
+               (cond [(private-key? pk)
+                      (send crypto pk->public-bytes pk)]
+                     [(bytes? pk) pk]
+                     [else (error 'initialize-handshake "missing key: ~e" sym)]))
+             (-mix-hash pk-bytes))))
+       (set! mpatterns mps)])
 
     ;; --------------------
 
-    ;; FIXME: buffer so exn implies out not written to?
-    (define/public (write-message payload out)
-      (define-values (shape next-pattern)
-        (match pattern
-          [(cons (cons '-> shape) next-pattern)
-           (values shape next-pattern)]
-          [(cons (cons '<- shape) _)
-           (error 'write-message "not your turn; pattern is ~e" pattern)]
-          [_ (error 'write-mesage "pattern error: ~e" pattern)]))
-      (write-message:shape shape out)
+    (define/private (direction rw)
+      (get-direction initiator? rw))
+
+    (define/private (in-handshake?)
+      (pair? mpatterns))
+
+    (define/private (next-message-pattern who rw)
+      (define dir (direction rw))
+      (match mpatterns
+        [(cons mp _)
+         (unless (eq? (message-pattern-dir mp) dir)
+           (error who "not your turn; pattern is ~e" mp))
+         mp]
+        ['() (handshake-pattern-t/dir pattern dir)]))
+
+    (define/private (advance-pattern!)
+      (when (pair? mpatterns)
+        (set! mpatterns (cdr mpatterns))
+        (when (null? mpatterns)
+          (define-values (cs-> cs<-) (-split))
+          (set! hhash (send symmetric-state get-handshake-hash))
+          ;; FIXME: only set if protocol allows (eg, not for one-way)
+          (set! tstate-w (if initiator? cs-> cs<-))
+          (set! tstate-r (if initiator? cs<- cs->))
+          (set! symmetric-state #f))))
+
+    ;; --------------------
+
+    (define/public (write-transport-message payload)
+      (unless tstate-w
+        (when (in-handshake?)
+          (error 'write-transport-message "not in transport phase"))
+        (error 'write-transport-message "not allowed to write transport messages"))
+      (send tstate-w encrypt-with-ad #"" payload))
+
+    (define/public (write-handshake-message payload)
+      (define who 'write-handshake-message)
+      (unless (in-handshake?)
+        (error who "not in handshake phase"))
+      (define mp (next-message-pattern who 'write))
+      (define out (open-output-bytes))
+      (-write-message:pattern who mp out)
       (define enc-payload (-encrypt-and-hash payload))
       (write-bytes enc-payload out)
-      (set! pattern next-pattern)
-      ;; FIXME: do split if empty?
-      (null? next-pattern))
+      (advance-pattern!)
+      (get-output-bytes out))
 
-    (define/public (write-message:shape shape out)
-      (for ([sym (in-list shape)])
-        (write-message:symbol sym out)))
+    (define/public (-write-message:pattern who mp out)
+      (for ([sym (in-list (message-pattern-tokens mp))])
+        (-write-message:token who sym out)))
 
-    (define/public (write-message:symbol sym out)
+    (define/public (-write-message:token who sym out)
       (define (do-dh sk pk)
-        (unless sk (error 'write-message "private key not set, symbol = ~e" sym))
-        (unless pk (error 'write-message "peer public key not set, symbol = ~e" sym))
+        (unless sk (error who "private key not set, symbol = ~e" sym))
+        (unless pk (error who "peer public key not set, symbol = ~e" sym))
         (-mix-key (send crypto dh sk pk)))
       (case sym
         [(e)
-         (when e (error 'write-message "ephemeral key already set"))
+         (when e (error who "ephemeral key already set"))
          (set! e (send crypto generate-private-key))
          (define e-pub (send crypto pk->public-bytes e))
          (write-bytes e-pub out)
          (-mix-hash e-pub)]
         [(s)
-         (unless s (error 'write-message "static key not set"))
+         (unless s (error who "static key not set"))
          (define s-pub (send crypto pk->public-bytes s))
          (define enc-s-pub (-encrypt-and-hash s-pub))
          (write-bytes enc-s-pub out)]
@@ -411,41 +382,44 @@
         [(es) (if initiator? (do-dh e rs) (do-dh s re))]
         [(se) (if initiator? (do-dh s re) (do-dh e rs))]
         [(ss) (do-dh s rs)]
-        [else (error 'write-message:symbol "unknown symbol: ~e" sym)]))
+        [else (error who "internal error: unknown token: ~e" sym)]))
 
     ;; --------------------
 
-    (define/public (read-message! msg out)
-      (define-values (shape next-pattern)
-        (match pattern
-          [(cons (cons '<- shape) next-pattern)
-           (values shape next-pattern)]
-          [(cons (cons '-> shape) _)
-           (error 'write-message "not your turn; pattern is ~e" pattern)]
-          [_ (error 'write-mesage "pattern error: ~e" pattern)]))
+    (define/public (read-transport-message msg)
+      (unless tstate-r
+        (when (in-handshake?)
+          (error 'read-transport-message "not in transport phase"))
+        (error 'read-transport-message "not allowed to receive transport messages"))
+      (send tstate-r decrypt-with-ad #"" msg))
+
+    (define/public (read-handshake-message msg)
+      (define who 'read-handshake-message)
+      (unless (in-handshake?)
+        (error who "not in handshake phase"))
+      (define mp (next-message-pattern who 'read))
       (define msg-in (open-input-bytes msg))
-      (read-message:shape shape msg-in)
+      (-read-message:pattern who mp msg-in)
       (define enc-payload (port->bytes msg-in))
       (define payload (-decrypt-and-hash enc-payload))
-      (write-bytes payload out)
-      (set! pattern next-pattern)
-      (null? next-pattern))
+      (advance-pattern!)
+      payload)
 
-    (define/public (read-message:shape shape msg-in)
-      (for ([sym (in-list shape)])
-        (read-message:symbol sym msg-in)))
+    (define/public (-read-message:pattern who mp msg-in)
+      (for ([sym (in-list (message-pattern-tokens mp))])
+        (-read-message:token who sym msg-in)))
 
-    (define/public (read-message:symbol sym msg-in)
+    (define/public (-read-message:token who sym msg-in)
       (define (do-dh sk pk)
-        (unless sk (error 'read-message "private key not set, symbol = ~e" sym))
-        (unless pk (error 'read-message "peer public key not set, symbol = ~e" sym))
+        (unless sk (error who "private key not set, symbol = ~e" sym))
+        (unless pk (error who "peer public key not set, symbol = ~e" sym))
         (-mix-key (send crypto dh sk pk)))
       (case sym
         [(e)
          (set! re (read-bytes* DHLEN msg-in))
          (-mix-hash re)]
         [(s)
-         (when rs (error 'read-message "peer static key already set"))
+         (when rs (error who "peer static key already set"))
          (define enc-rs
            (let ([len (+ DHLEN (if (-has-key?) AUTHLEN 0))])
              (read-bytes* len msg-in)))
@@ -454,7 +428,7 @@
         [(es) (if initiator? (do-dh e rs) (do-dh s re))]
         [(se) (if initiator? (do-dh s re) (do-dh e rs))]
         [(ss) (do-dh s rs)]
-        [else (error 'read-message "unknown handshake symbol: ~e" sym)]))
+        [else (error who "internal error: unknown token: ~e" sym)]))
 
     ;; --------------------
     ;; Forwarded methods
@@ -469,5 +443,7 @@
       (send symmetric-state decrypt-and-hash ctext))
     (define/private (-has-key?)
       (send symmetric-state has-key?))
+    (define/private (-split)
+      (send symmetric-state split))
 
     ))
