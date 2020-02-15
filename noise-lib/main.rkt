@@ -96,42 +96,13 @@
                               #:s [s #f] #:e [e #f])
       (let* ([info (if s (hash-set info 's s) info)]
              [info (if e (hash-set info 'e e) info)])
-        (new party% (crypto crypto) (info info))))
+        (new connection% (crypto crypto) (info info))))
 
     (define/public (new-initiator [info #hasheq()] #:s [s #f] #:e [e #f])
       (new-party #t info #:s s #:e e))
     (define/public (new-responder [info #hasheq()] #:s [s #f] #:e [e #f])
       (new-party #f info #:s s #:e e))
     ))
-
-(define party%
-  (class object%
-    (init crypto info)
-    (super-new)
-
-    (define state #f)
-    (define sema (make-semaphore 1))
-    (define-syntax-rule (with-lock . body)
-      ;; FIXME: kill connection on error
-      (call-with-semaphore sema (lambda () . body)))
-
-    ))
-
-;; State machine for party%
-;;   -> (created with keys, initiator?)
-;; 0 Init:
-;;   write-prologue -> 0
-;;   {write,read}-message -> 1
-;; 1 Handshake: (sub-state based on handshake pattern)
-;;   {write,read}-message -> 1, 2
-;; 2 Transport:
-;;   {write,read}-message -> 2
-
-;; Meta: in-handshake?, can-{read,write}?
-;;   next-write-security, next-read-security -- src/dest security levels?
-
-;; Split {write,read}-message into handshake, transport versions?
-;; Allow access to split cipher-states?
 
 ;; ----------------------------------------
 
@@ -202,7 +173,7 @@
 
     (field [ck #f]) ;; bytes[(send crypto get-hashlen)]
     (field [h #f])  ;; bytes[(send crypto get-hashlen)]
-    (define cipher-state (new cipher-state% (crypto crypto)))
+    (define cstate (new cipher-state% (crypto crypto)))
 
     ;; initialize
     (let ()
@@ -219,7 +190,7 @@
       (define-values (new-ck new-k)
         (send crypto hkdf-n ck ikm 2))
       (set! ck new-ck)
-      (send cipher-state initialize-key (subbytes new-k 0 KEYLEN)))
+      (send cstate initialize-key (subbytes new-k 0 KEYLEN)))
 
     (define/public (mix-hash data)
       (set! h (send crypto digest (bytes-append h data))))
@@ -229,17 +200,17 @@
         (send crypto hkdf-n ck ikm 3))
       (set! ck new-ck)
       (mix-hash tmp-h)
-      (send cipher-state initialize-key (subbytes new-k 0 KEYLEN)))
+      (send cstate initialize-key (subbytes new-k 0 KEYLEN)))
 
     (define/public (get-handshake-hash) h)
 
     (define/public (encrypt-and-hash ptext)
-      (define ctext (send cipher-state encrypt-with-ad h ptext))
+      (define ctext (send cstate encrypt-with-ad h ptext))
       (mix-hash ctext)
       ctext)
 
     (define/public (decrypt-and-hash ctext)
-      (define ptext (send cipher-state decrypt-with-ad h ctext))
+      (define ptext (send cstate decrypt-with-ad h ctext))
       (mix-hash ctext)
       ptext)
 
@@ -255,7 +226,7 @@
     ;; Forwarded methods
 
     (define/public (has-key?)
-      (send cipher-state has-key?))
+      (send cstate has-key?))
     ))
 
 ;; FIXME TODO: add state machine, eg split should occur after handshake
@@ -265,28 +236,23 @@
 (define handshake-state%
   (class object%
     (init-field crypto)     ;; crypto%
-    (init-field pattern)    ;; HandshakePattern
     (init-field initiator?) ;; Boolean
+    (init pattern)          ;; HandshakePattern
     (init protocol-name)    ;; Bytes -- FIXME: determines pattern, etc?
+    (init [info '#hash()])  ;; Hash[...]
+    (init [prologue #""])   ;; Bytes
 
     ;; Static keys of self and peer
-    (init-field [s  #f]) ;; private-key? or #f
-    (init-field [rs #f]) ;; bytes or #f
+    (field [s  (hash-ref info 's  #f)]) ;; private-key? or #f
+    (field [rs (hash-ref info 'rs #f)]) ;; bytes or #f
 
     ;; Ephemeral keys of self and peer (rarely as init args)
-    (init-field [e  #f]) ;; private-key? or #f
-    (init-field [re #f]) ;; bytes or #f
-
-    ;; Prologue
-    (init [prologue #""]) ;; Bytes
+    (field [e  (hash-ref info 'e  #f)]) ;; private-key? or #f
+    (field [re (hash-ref info 're #f)]) ;; bytes or #f
 
     ;; State
-    (define mpatterns null) ;; (Listof MessagePattern), mutated
-    (define symmetric-state
-      (new symmetric-state% (crypto crypto) (protocol-name protocol-name)))
-    (define tstate-w #f) ;; #f or cipher-state%, mutated
-    (define tstate-r #f) ;; #f or cipher-state%, mutated
-    (define hhash #f)    ;; #f or bytes, mutated
+    (field [mpatterns (handshake-pattern-msgs pattern)]) ;; (Listof MessagePattern), mutated
+    (field [sstate (new symmetric-state% (crypto crypto) (protocol-name protocol-name))])
 
     (super-new)
 
@@ -294,28 +260,31 @@
     ;; Initialization
 
     (-mix-hash prologue)
-    (match pattern
-      [(handshake-pattern pre mps _ _)
-       (for ([mp (in-list pre)] #:when (eq? (message-pattern-dir mp) (direction 'read)))
-         (for ([sym (in-list (message-pattern-tokens mp))])
-           (define pk (case sym [(s) s] [(e) e] [(rs) rs] [(re) re] [else 'skip]))
-           (unless (eq? pk 'skip)
-             (define pk-bytes
-               (cond [(private-key? pk)
-                      (send crypto pk->public-bytes pk)]
-                     [(bytes? pk) pk]
-                     [else (error 'initialize-handshake "missing key: ~e" sym)]))
-             (-mix-hash pk-bytes))))
-       (set! mpatterns mps)])
+    (for ([mp (in-list (handshake-pattern-pre pattern))]
+          #:when (eq? (message-pattern-dir mp) (direction 'read)))
+      (for ([sym (in-list (message-pattern-tokens mp))])
+        (define pk (case sym [(s) s] [(e) e] [(rs) rs] [(re) re] [else 'skip]))
+        (unless (eq? pk 'skip)
+          (define pk-bytes
+            (cond [(private-key? pk)
+                   (send crypto pk->public-bytes pk)]
+                  [(bytes? pk) pk]
+                  [else (error 'initialize-handshake "missing key: ~e" sym)]))
+          (-mix-hash pk-bytes))))
 
     ;; --------------------
 
-    (define/private (direction rw)
+    (define/public (direction rw)
       (get-direction initiator? rw))
 
-    (define/private (in-handshake?)
-      (pair? mpatterns))
+    (define/public (can-write-message?)
+      (and (pair? mpatterns)
+           (eq? (message-pattern-dir (car mpatterns)) (direction 'write))))
+    (define/public (can-read-message?)
+      (and (pair? mpatterns)
+           (eq? (message-pattern-dir (car mpatterns)) (direction 'read))))
 
+    ;; next-message-pattern : Symbol (U 'read 'write) -> MessagePattern
     (define/private (next-message-pattern who rw)
       (define dir (direction rw))
       (match mpatterns
@@ -323,39 +292,28 @@
          (unless (eq? (message-pattern-dir mp) dir)
            (error who "not your turn; pattern is ~e" mp))
          mp]
-        ['() (handshake-pattern-t/dir pattern dir)]))
+        [_ (error who "internal error, no next message pattern")]))
 
+    ;; advance-pattern! : -> (U #f HandshakeEnd)
     (define/private (advance-pattern!)
-      (when (pair? mpatterns)
-        (set! mpatterns (cdr mpatterns))
-        (when (null? mpatterns)
-          (define-values (cs-> cs<-) (-split))
-          (set! hhash (send symmetric-state get-handshake-hash))
-          ;; FIXME: only set if protocol allows (eg, not for one-way)
-          (set! tstate-w (if initiator? cs-> cs<-))
-          (set! tstate-r (if initiator? cs<- cs->))
-          (set! symmetric-state #f))))
+      (set! mpatterns (cdr mpatterns))
+      (cond [(null? mpatterns)
+             (define-values (cs-> cs<-) (send sstate split))
+             (define hh (send sstate get-handshake-hash))
+             (list* hh (if initiator? cs-> cs<-) (if initiator? cs<- cs->))]
+            [else #f]))
 
     ;; --------------------
 
-    (define/public (write-transport-message payload)
-      (unless tstate-w
-        (when (in-handshake?)
-          (error 'write-transport-message "not in transport phase"))
-        (error 'write-transport-message "not allowed to write transport messages"))
-      (send tstate-w encrypt-with-ad #"" payload))
-
+    ;; write-handshake-message : Bytes -> (values Bytes (U #f HandshakeEnd))
     (define/public (write-handshake-message payload)
       (define who 'write-handshake-message)
-      (unless (in-handshake?)
-        (error who "not in handshake phase"))
       (define mp (next-message-pattern who 'write))
       (define out (open-output-bytes))
       (-write-message:pattern who mp out)
       (define enc-payload (-encrypt-and-hash payload))
       (write-bytes enc-payload out)
-      (advance-pattern!)
-      (get-output-bytes out))
+      (values (get-output-bytes out) (advance-pattern!)))
 
     (define/public (-write-message:pattern who mp out)
       (for ([sym (in-list (message-pattern-tokens mp))])
@@ -363,8 +321,8 @@
 
     (define/public (-write-message:token who sym out)
       (define (do-dh sk pk)
-        (unless sk (error who "private key not set, symbol = ~e" sym))
-        (unless pk (error who "peer public key not set, symbol = ~e" sym))
+        (unless sk (error who "private key not set, token = ~e" sym))
+        (unless pk (error who "peer public key not set, token = ~e" sym))
         (-mix-key (send crypto dh sk pk)))
       (case sym
         [(e)
@@ -386,24 +344,15 @@
 
     ;; --------------------
 
-    (define/public (read-transport-message msg)
-      (unless tstate-r
-        (when (in-handshake?)
-          (error 'read-transport-message "not in transport phase"))
-        (error 'read-transport-message "not allowed to receive transport messages"))
-      (send tstate-r decrypt-with-ad #"" msg))
-
+    ;; read-handshake-message : Bytes -> (values Bytes (U #f HandshakeEnd))
     (define/public (read-handshake-message msg)
       (define who 'read-handshake-message)
-      (unless (in-handshake?)
-        (error who "not in handshake phase"))
       (define mp (next-message-pattern who 'read))
       (define msg-in (open-input-bytes msg))
       (-read-message:pattern who mp msg-in)
       (define enc-payload (port->bytes msg-in))
       (define payload (-decrypt-and-hash enc-payload))
-      (advance-pattern!)
-      payload)
+      (values payload (advance-pattern!)))
 
     (define/public (-read-message:pattern who mp msg-in)
       (for ([sym (in-list (message-pattern-tokens mp))])
@@ -411,8 +360,8 @@
 
     (define/public (-read-message:token who sym msg-in)
       (define (do-dh sk pk)
-        (unless sk (error who "private key not set, symbol = ~e" sym))
-        (unless pk (error who "peer public key not set, symbol = ~e" sym))
+        (unless sk (error who "private key not set, token = ~e" sym))
+        (unless pk (error who "peer public key not set, token = ~e" sym))
         (-mix-key (send crypto dh sk pk)))
       (case sym
         [(e)
@@ -434,16 +383,117 @@
     ;; Forwarded methods
 
     (define/private (-mix-hash data)
-      (send symmetric-state mix-hash data))
+      (send sstate mix-hash data))
     (define/private (-mix-key data)
-      (send symmetric-state mix-key data))
+      (send sstate mix-key data))
     (define/private (-encrypt-and-hash ptext)
-      (send symmetric-state encrypt-and-hash ptext))
+      (send sstate encrypt-and-hash ptext))
     (define/private (-decrypt-and-hash ctext)
-      (send symmetric-state decrypt-and-hash ctext))
+      (send sstate decrypt-and-hash ctext))
     (define/private (-has-key?)
-      (send symmetric-state has-key?))
-    (define/private (-split)
-      (send symmetric-state split))
+      (send sstate has-key?))
 
     ))
+
+;; ----------------------------------------
+;; Connection
+
+(define connection%
+  (class object%
+    (init-field crypto)
+    (init protocol-name
+          prologue
+          info)
+    (init-field pattern)
+
+    (define hstate ;; #f or handshake-state%, mutated
+      (new handshake-state% (crypto crypto) (pattern pattern) (protocol-name protocol-name)
+           (prologue prologue) (info info)))
+    (define tstate-w #f) ;; #f or cipher-state%, mutated
+    (define tstate-r #f) ;; #f or cipher-state%, mutated
+    (define hhash #f)    ;; #f or bytes, mutated
+    (define sema (make-semaphore 1))
+
+    (super-new)
+
+    ;; --------------------
+
+    (define-syntax-rule (with-lock . body)
+      ;; FIXME: kill connection on error?
+      (let ([go (lambda () . body)])
+        (if sema (call-with-semaphore go) (go))))
+
+    (define/public (in-handshake-phase?) (and hstate #t))
+    (define/public (in-transport-phase?) (and (or tstate-w tstate-r) #t))
+
+    (define/public (get-handshake-hash)
+      ;; May want to get hhash even if connection is closed, so test hhash
+      ;; rather than eg (in-transport-phase?).
+      (or hhash (error 'get-handshake-hash "handshake is not finished")))
+
+    (define/private (end-of-handshake! hs-end)
+      (match hs-end
+        [(list* hh cs-w cs-r)
+         (set! hhash hh)
+         (set! tstate-w cs-w)
+         (set! tstate-r cs-r)
+         (set! hstate #f)]))
+
+    (define/private (kill-connection!)
+      (set! tstate-w #f)
+      (set! tstate-r #f)
+      (set! hstate #f))
+
+    ;; --------------------
+
+    (define/public (can-write-message?)
+      (with-lock
+        (cond [hstate (send hstate can-write-message?)]
+              [else (and tstate-w #t)])))
+
+    (define/public (can-read-message?)
+      (with-lock
+        (cond [hstate (send hstate can-read-message?)]
+              [else (and tstate-r #t)])))
+
+    ;; --------------------
+
+    (define/public (write-handshake-message payload)
+      (with-lock
+        (unless (in-handshake-phase?)
+          (error 'write-handshake-message "not in handshake phase"))
+        (define-values (msg hs-end)
+          (send hstate write-handshake-message payload))
+        (when hs-end (end-of-handshake! hs-end))
+        msg))
+
+    (define/public (read-handshake-message msg)
+      (with-lock
+        (unless (in-handshake-phase?)
+          (error 'read-handshake-message "not in handshake phase"))
+        (define-values (payload hs-end)
+          (send hstate read-handshake-message payload))
+        (when hs-end (end-of-handshake! hs-end))
+        payload))
+
+    ;; --------------------
+
+    (define/public (write-transport-message payload)
+      (with-lock
+        (unless (in-transport-phase?)
+          (error 'write-transport-message "not in transport phase"))
+        (unless tstate-w
+          (error 'write-transport-message "not allowed to write transport messages"))
+        (send tstate-w encrypt-with-ad #"" payload)))
+
+    (define/public (read-transport-message msg)
+      (with-lock
+        (unless (in-transport-phase?)
+          (error 'read-transport-message "not in transport phase"))
+        (unless tstate-r
+          (error 'read-transport-message "not allowed to receive transport messages"))
+        (send tstate-r decrypt-with-ad #"" msg)))
+
+    ))
+
+;; Meta: next-write-security, next-read-security -- src/dest security levels?
