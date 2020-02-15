@@ -26,7 +26,7 @@
 
 (define crypto%
   (class object%
-    (init ds cs pk)
+    (init-field ds cs pk)
     (init factories)
     (super-new)
 
@@ -76,9 +76,21 @@
 
     (define/public (pk->public-bytes pk)
       (match (pk-key->datum pk 'rkt-public)
-        [(list 'ecx 'public curve (? bytes pub-bytes))
+        [(list 'ecx 'public _curve (? bytes? pub-bytes))
          pub-bytes]
         [_ (error 'pk->public-bytes "failed")]))
+
+    (define/public (bytes->private-key bs)
+      (define datum
+        (cond [(equal? pk '(ecx (curve x25519)))
+               `(ecx private x25519 ,bs)]
+              [(equal? pk '(ecx (curve x448)))
+               `(ecx private x448 ,bs)]
+              [else (error 'bytes->private-key "unsupported PK algorithm: ~e" pk)]))
+      (datum->pk-key datum 'rkt-private))
+
+    (define/public (datum->pk-key datum fmt)
+      (crypto:datum->pk-key datum fmt (get-factory pkp)))
     ))
 
 (define (make-crypto ds cs pk #:factories [factories (crypto-factories)])
@@ -89,19 +101,35 @@
 
 (define protocol%
   (class object%
-    (init-field crypto)
+    (init-field crypto pattern protocol-name)
     (super-new)
 
-    (define/public (new-party initiator? [info #hasheq()]
-                              #:s [s #f] #:e [e #f])
-      (let* ([info (if s (hash-set info 's s) info)]
-             [info (if e (hash-set info 'e e) info)])
-        (new connection% (crypto crypto) (info info))))
+    (define/public (get-crypto) crypto)
+    (define/public (get-pattern) pattern)
+    (define/public (get-protocol-name) protocol-name)
 
-    (define/public (new-initiator [info #hasheq()] #:s [s #f] #:e [e #f])
-      (new-party #t info #:s s #:e e))
-    (define/public (new-responder [info #hasheq()] #:s [s #f] #:e [e #f])
-      (new-party #f info #:s s #:e e))
+    (define/public (new-party initiator? [info #hasheq()]
+                              #:s [s #f] #:rs [rs #f])
+      (let* ([s (if (bytes? s) (bytes->private-key s) s)]
+             [info (if s  (hash-set info 's  s)  info)]
+             [info (if rs (hash-set info 'rs rs) info)])
+        (new connection% (protocol this) (initiator? initiator?) (info info))))
+
+    (define/public (new-initiator [info #hasheq()] #:s [s #f] #:rs [rs #f])
+      (new-party #t info #:s s #:rs rs))
+    (define/public (new-responder [info #hasheq()] #:s [s #f] #:rs [rs #f])
+      (new-party #f info #:s s #:rs rs))
+
+    ;; --------------------
+
+    (define/public (generate-private-key)
+      (send crypto generate-private-key))
+    (define/public (pk->public-bytes pk)
+      (send crypto pk->public-bytes pk))
+    (define/public (datum->pk-key datum fmt)
+      (send crypto datum->pk-key datum))
+    (define/public (bytes->private-key datum)
+      (send crypto bytes->private-key datum))
     ))
 
 ;; ----------------------------------------
@@ -112,18 +140,19 @@
 ;;   AESGCM: 96-bit nonce is 32 zero bits + BE(n)
 ;; SHA256, SHA512, BLAKE2s, BLAKE2b
 
-(define (noise-protocol protocol)
-  (define (mk v)
-    v
-    #;
-    (match v
-      [(list pattern-name exts pk ci di)
-       '...]))
-  (match protocol
-    [(? string? protocol)
-     (mk (parse-protocol protocol))]
-    [(? symbol? protocol)
-     (mk (parse-protocol (symbol->string protocol)))]))
+(define (noise-protocol name)
+  (define protocol-name
+    (cond [(string? name) name]
+          [(symbol? name) (symbol->string name)]))
+  (match (parse-protocol protocol-name)
+    [(list pattern-name '() pk ci di)
+     (define crypto (make-crypto di ci pk #:factories (crypto-factories)))
+     (define pattern
+       (or (hash-ref handshake-table pattern-name #f)
+           (error 'noise-protocol "unknown handshake pattern\n  protocol: ~e" name)))
+     (new protocol%
+          (protocol-name (bytes->immutable-bytes (string->bytes/utf-8 protocol-name)))
+          (crypto crypto) (pattern pattern))]))
 
 ;; ----------------------------------------
 
@@ -181,7 +210,7 @@
       (define HASHLEN (send crypto get-hashlen))
       (set! h
             (cond [(<= plen HASHLEN)
-                   (bytes-append plen (make-bytes (- HASHLEN plen) 0))]
+                   (bytes-append protocol-name (make-bytes (- HASHLEN plen) 0))]
                   [else
                    (send crypto digest protocol-name)]))
       (set! ck h))
@@ -228,8 +257,6 @@
     (define/public (has-key?)
       (send cstate has-key?))
     ))
-
-;; FIXME TODO: add state machine, eg split should occur after handshake
 
 ;; ----------------------------------------
 
@@ -400,15 +427,15 @@
 
 (define connection%
   (class object%
-    (init-field crypto)
-    (init protocol-name
-          prologue
-          info)
-    (init-field pattern)
+    (init protocol initiator? info)
 
     (define hstate ;; #f or handshake-state%, mutated
-      (new handshake-state% (crypto crypto) (pattern pattern) (protocol-name protocol-name)
-           (prologue prologue) (info info)))
+      (new handshake-state%
+           (crypto (send protocol get-crypto))
+           (protocol-name (send protocol get-protocol-name))
+           (pattern (send protocol get-pattern))
+           (initiator? initiator?)
+           (info info)))
     (define tstate-w #f) ;; #f or cipher-state%, mutated
     (define tstate-r #f) ;; #f or cipher-state%, mutated
     (define hhash #f)    ;; #f or bytes, mutated
@@ -421,7 +448,7 @@
     (define-syntax-rule (with-lock . body)
       ;; FIXME: kill connection on error?
       (let ([go (lambda () . body)])
-        (if sema (call-with-semaphore go) (go))))
+        (if sema (call-with-semaphore sema go) (go))))
 
     (define/public (in-handshake-phase?) (and hstate #t))
     (define/public (in-transport-phase?) (and (or tstate-w tstate-r) #t))
@@ -472,7 +499,7 @@
         (unless (in-handshake-phase?)
           (error 'read-handshake-message "not in handshake phase"))
         (define-values (payload hs-end)
-          (send hstate read-handshake-message payload))
+          (send hstate read-handshake-message msg))
         (when hs-end (end-of-handshake! hs-end))
         payload))
 
@@ -483,7 +510,7 @@
         (unless (in-transport-phase?)
           (error 'write-transport-message "not in transport phase"))
         (unless tstate-w
-          (error 'write-transport-message "not allowed to write transport messages"))
+          (error 'write-transport-message "not allowed to send transport messages"))
         (send tstate-w encrypt-with-ad #"" payload)))
 
     (define/public (read-transport-message msg)
