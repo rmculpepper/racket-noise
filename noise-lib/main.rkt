@@ -26,19 +26,8 @@
 
 (define crypto%
   (class* object% (crypto<%>)
-    (init-field ds cs pk)
-    (init factories)
+    (init-field di hkdfi ci pkp)
     (super-new)
-
-    (field [di (or (get-digest ds factories) (fail "digest" ds))]
-           [ci (or (get-cipher cs factories) (fail "cipher" cs))]
-           [pkp (with-handlers ([exn:fail? (lambda (e) (fail "PK" pk))])
-                  (parameterize ((crypto-factories factories))
-                    (generate-pk-parameters (car pk) (cdr pk))))]
-           [hkdfi (or (get-kdf `(hkdf ,ds) factories) (fail "KDF" `(hkdf ,ds)))])
-
-    (define/private (fail what spec)
-      (error 'crypto% "unable to get implementation\n  ~a: ~v" what spec))
 
     ;; ----
 
@@ -55,7 +44,8 @@
     ;; ----
 
     (define big-endian-nonce?
-      (case (car cs) [(aes) #t] [(chacha20-poly1305) #f] [else #f]))
+      (case (car (send ci get-spec))
+        [(aes) #t] [(chacha20-poly1305) #f] [else #f]))
 
     (define/public (nonce->bytes n)
       (bytes-append Z32 (integer->integer-bytes n 8 #f big-endian-nonce?)))
@@ -74,10 +64,10 @@
     ;; ----
 
     (define DHLEN ;; length of public key and shared secret
-      (match pk
-        ['(ecx (curve x25519)) 32]
-        ['(ecx (curve x448)) 56]
-        [_ (error 'crypto% "unknown PK algorithm: ~e" pk)]))
+      (match (pk-parameters->datum pkp 'rkt-params)
+        ['(ecx params x25519) 32]
+        ['(ecx params x448) 56]
+        [pk (error 'crypto% "unknown PK algorithm: ~e" pk)]))
 
     (define/public (get-dhlen) DHLEN)
 
@@ -95,19 +85,56 @@
 
     (define/public (bytes->private-key bs)
       (define datum
-        (cond [(equal? pk '(ecx (curve x25519)))
-               `(ecx private x25519 ,bs)]
-              [(equal? pk '(ecx (curve x448)))
-               `(ecx private x448 ,bs)]
-              [else (error 'bytes->private-key "unsupported PK algorithm: ~e" pk)]))
+        (match (pk-parameters->datum pkp 'rkt-params)
+          ['(ecx params x25519)
+           `(ecx private x25519 ,bs)]
+          ['(ecx params x448)
+           `(ecx private x448 ,bs)]
+          [pk (error 'bytes->private-key "unsupported PK algorithm: ~e" pk)]))
       (datum->pk-key datum 'rkt-private))
 
     (define/public (datum->pk-key datum fmt)
       (crypto:datum->pk-key datum fmt (get-factory pkp)))
     ))
 
-(define (make-crypto ds cs pk #:factories [factories (crypto-factories)])
-  (new crypto% (ds ds) (cs cs) (pk pk) (factories factories)))
+(define (noise-crypto d c pk #:factories [factories (crypto-factories)])
+  (define (fail what spec)
+    (error 'noise-crypto "unable to get implementation\n  ~a: ~v" what spec))
+  (define di
+    (cond [(digest-impl? d) d]
+          [(get-digest d factories) => values]
+          [else (fail "digest" d)]))
+  (define hkdfi
+    (or (get-kdf `(hkdf ,(send di get-spec)) (get-factory di))
+        (fail "KDF" `(hkdf ,(send di get-spec)))))
+  (define ci
+    (cond [(cipher-impl? c) c]
+          [(get-cipher c factories) => values]
+          [else (fail "cipher" c)]))
+  (define pkp
+    (match pk
+      [(? pk-parameters?) pk]
+      [(cons pkspec pkconfig)
+       (define pki (or (get-pk pkspec factories) (fail "PK algorithm" pk)))
+       (generate-pk-parameters pki pkconfig)]))
+  (new crypto% (di di) (hkdfi hkdfi) (ci ci) (pkp pkp)))
+
+(define (check-crypto who crypto0 ds cs pk)
+  (define (bad what wanted got)
+    (error who "crypto object contains wrong ~a implementation\n  expected: ~e\n  got: ~e"
+           what wanted got))
+  (let ([c-ds (send (get-field di crypto0) get-spec)])
+    (unless (equal? ds c-ds) (error "digest" ds c-ds)))
+  (let ([c-cs (send (get-field ci crypto0) get-spec)])
+    (unless (equal? cs c-cs) (error "cipher" cs c-cs)))
+  (let ([c-hkdfs (send (get-field hkdfi crypto0) get-spec)])
+    (unless (equal? `(hkdf ,ds) c-hkdfs) (error "KDF" `(hkdf ,ds) c-hkdfs)))
+  (let ([c-pkpd (pk-parameters->datum (get-field pkp crypto0) 'rkt-params)])
+    (match pk
+      [`(ecx (curve ,curve))
+       (unless (equal? `(ecx params ,curve) c-pkpd)
+         (bad "PK parameters" `(ecx params ,curve) c-pkpd))]))
+  crypto0)
 
 ;; ----------------------------------------
 ;; Noise protocols by name
@@ -151,13 +178,17 @@
 
 ;; ----------------------------------------
 
-(define (noise-protocol name #:factories [factories (crypto-factories)])
+(define (noise-protocol name
+                        #:crypto [crypto0 #f]
+                        #:factories [factories (crypto-factories)])
   (define protocol-name
     (cond [(string? name) name]
           [(symbol? name) (symbol->string name)]))
   (match (parse-protocol protocol-name)
     [(list pattern-name exts pk ci di)
-     (define crypto (make-crypto di ci pk #:factories factories))
+     (define crypto
+       (cond [crypto0 (check-crypto 'noise-protocol crypto0 di ci pk)]
+             [else (noise-crypto di ci pk #:factories factories)]))
      (define base-pattern
        (or (hash-ref handshake-table pattern-name #f)
            (error 'noise-protocol "unknown handshake pattern\n  protocol: ~e" name)))
@@ -188,22 +219,24 @@
 
     (define/public (encrypt-with-ad ad ptext)
       (cond [k
-             ;; check nonce okay
-             ;; NOTE: must convert nonce from integer to bytes
+             (check-nonce 'encrypt-with-ad n)
              (begin0 (send crypto encrypt k n ad ptext)
                (set! n (add1 n)))]
             [else ptext]))
 
     (define/public (decrypt-with-ad ad ctext)
       (cond [k
-             ;; check nonce okay
-             ;; NOTE: must convert nonce from integer to bytes
+             (check-nonce 'decrypt-with-ad n)
              (begin0 (send crypto decrypt k n ad ctext)
                (set! n (add1 n)))]
             [else ctext]))
 
     (define/public (rekey)
       (set! k (send crypto rekey k)))
+
+    (define/private (check-nonce who n)
+      (unless (<= n MAX-NONCE)
+        (error who "nonce exhausted")))
     ))
 
 ;; ----------------------------------------
