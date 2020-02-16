@@ -7,12 +7,12 @@
 ;;(crypto-factories (list decaf-factory nettle-factory))
 (crypto-factories libcrypto-factory)
 
-;; (define p (noise-protocol "Noise_NN_25519_ChaChaPoly_SHA512"))
-;; (define p (noise-protocol "Noise_NK_25519_ChaChaPoly_SHA512"))
-;; (define p (noise-protocol "Noise_NNpsk0_25519_ChaChaPoly_SHA512"))
-;; (define p (noise-protocol "Noise_NN_25519_ChaChaPoly_SHA512"))
+(define pattern "IK")
 
-(define p (noise-protocol "Noise_NN_448_ChaChaPoly_SHA512"))
+;; NN, NK, NNpsk0, XK, ...
+
+(define protocol-name (format "Noise_~a_25519_ChaChaPoly_SHA512" pattern))
+(define p (noise-protocol protocol-name))
 
 (define psk (crypto-random-bytes 32))
 
@@ -22,8 +22,11 @@
 (define bob-sk (send p generate-private-key))
 (define bob-pub-bytes (send p pk->public-bytes bob-sk))
 
-(define alice (send p new-initiator #:s alice-sk #:rs bob-pub-bytes (hash 'psk psk)))
-(define bob (send p new-responder #:s bob-sk (hash 'psk psk)))
+(define alice-info (send p trim-info #t (hasheq 's alice-sk 'rs bob-pub-bytes)))
+(define bob-info   (send p trim-info #f (hasheq 's bob-sk   'rs alice-pub-bytes)))
+
+(define alice (send p new-initiator alice-info))
+(define bob   (send p new-responder bob-info))
 
 (define msg1 (send alice write-handshake-message #"hello"))
 (send bob read-handshake-message msg1)
@@ -33,6 +36,13 @@
 
 (list (send alice in-handshake-phase?)
       (send bob in-handshake-phase?))
+
+(let loop ([->? #t])
+  (when (or (send alice in-handshake-phase?) (send bob in-handshake-phase?))
+    (define msg (send (if ->? alice bob) write-handshake-message #"..."))
+    (send (if ->? bob alice) read-handshake-message msg)
+    (printf "-- did another ~s handshake round\n" (if ->? '-> '<-))
+    (loop (not ->?))))
 
 (define msg3 (send alice write-transport-message #"nice talking with you"))
 (send bob read-transport-message msg3)

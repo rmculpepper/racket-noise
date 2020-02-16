@@ -1,5 +1,6 @@
 #lang racket/base
-(require racket/class
+(require (for-syntax racket/base)
+         racket/class
          racket/match
          racket/string
          racket/port
@@ -166,6 +167,21 @@
 
     ;; --------------------
 
+    ;; for testing
+    (define/public (trim-info initiator? info)
+      (define keys
+        (filter values
+                (for*/list ([mp (in-list (handshake-pattern-pre pattern))]
+                            [token (in-list (message-pattern-tokens mp))])
+                  (define from-self? (eq? (eq? (message-pattern-dir mp) '->) initiator?))
+                  (token->info-key token from-self?))))
+      (for/fold ([info info]) ([(k v) (in-hash info)])
+        (cond [(memq k keys) info]
+              [(not (memq k '(rs re))) info]
+              [else (hash-remove info k)])))
+
+    ;; --------------------
+
     (define/public (generate-private-key)
       (send crypto generate-private-key))
     (define/public (pk->public-bytes pk)
@@ -308,19 +324,27 @@
 
 ;; ----------------------------------------
 
+(begin-for-syntax
+  (require syntax/transformer)
+  (define (make-hash-key-transformer hash-id key-expr)
+    (with-syntax ([hash-id hash-id] [key-expr key-expr])
+      (make-variable-like-transformer
+       #'(hash-ref hash-id key-expr #f)
+       (lambda (stx)
+         (syntax-case stx ()
+           [(set! _ value)
+            #'(set! hash-id (hash-set hash-id key-expr value))]))))))
+
+(define (token->info-key tok from-self?)
+  (if from-self?
+      (case tok [(s)  's] [(e)  'e] [(rs) 'rs] [(re) 're] [else #f])
+      (case tok [(s) 'rs] [(e) 're] [(rs)  's] [(re)  'e] [else #f])))
+
 (define handshake-state%
   (class* object% (handshake-state<%>)
     (init protocol)         ;; protocol%
     (init-field initiator?) ;; Boolean
-    (init-field [info '#hash()])  ;; Hash[...]
-
-    ;; Static keys of self and peer
-    (field [s  (hash-ref info 's  #f)]) ;; private-key? or #f
-    (field [rs (hash-ref info 'rs #f)]) ;; bytes or #f
-
-    ;; Ephemeral keys of self and peer (rarely as init args)
-    (field [e  (hash-ref info 'e  #f)]) ;; private-key? or #f
-    (field [re (hash-ref info 're #f)]) ;; bytes or #f
+    (init-field info)       ;; Hash[...], mutated
 
     (define crypto (send protocol get-crypto))
     (define mpatterns ;; (Listof MessagePattern), mutated
@@ -330,12 +354,6 @@
            (protocol-name (send protocol get-protocol-name))))
 
     (define using-psk? (send protocol using-psk?))
-    (define/private (get-psk)
-      (cond [(hash-ref info 'psk #f)
-             => (lambda (psk)
-                  (cond [(procedure? psk) (psk rs)]
-                        [else psk]))]
-            [else #f]))
 
     (super-new)
 
@@ -343,25 +361,43 @@
     ;; Initialization
 
     (-mix-hash (hash-ref info 'prologue #""))
+    (set! info (hash-remove info 'prologue))
+
     (let ([pre (handshake-pattern-pre (send protocol get-pattern))])
       (define (process-pre same-side? mp)
-        (for ([sym (in-list (message-pattern-tokens mp))])
-          (define pk (get-pk same-side? sym))
-          (unless (eq? pk 'skip)
-            (define pk-bytes
-              (cond [(private-key? pk) (send crypto pk->public-bytes pk)]
-                    [(bytes? pk) pk]
-                    [else (error 'initialize-handshake "missing key: ~e" sym)]))
-            (-mix-hash pk-bytes))))
-      (define (get-pk same-side? sym)
-        (if same-side?
-            (case sym [(s)  s] [(e)  e] [(rs) rs] [(re) re] [else 'skip])
-            (case sym [(s) rs] [(e) re] [(rs)  s] [(re)  e] [else 'skip])))
+        (for ([tok (in-list (message-pattern-tokens mp))])
+          (define pk-var (token->info-key same-side? tok))
+          (when pk-var
+            (cond [(hash-ref info pk-var #f)
+                   => (lambda (pk)
+                        (define pk-bytes
+                          (cond [(private-key? pk) (send crypto pk->public-bytes pk)]
+                                [(bytes? pk) pk]))
+                        (-mix-hash pk-bytes))]
+                  [else (error 'handshake-state% "missing key: ~e" tok)]))))
       (define ((has-dir? dir) mp) (eq? (message-pattern-dir mp) dir))
       (for ([mp (in-list (filter (has-dir? '->) pre))])
         (process-pre initiator? mp))
       (for ([mp (in-list (filter (has-dir? '<-) pre))])
         (process-pre (not initiator?) mp)))
+
+    (define-syntax-rule (define-info-var var)
+      (define-syntax var (make-hash-key-transformer #'info #'(quote var))))
+
+    ;; Static and ephemeral keys of self
+    (define-info-var s) ;; private-key? or #f
+    (define-info-var e) ;; private-key? or #f
+
+    ;; Static and ephemeral keys of peer
+    (define-info-var rs) ;; Bytes or #f
+    (define-info-var re) ;; Bytes or #f
+
+    (define/private (get-psk)
+      (cond [(hash-ref info 'psk #f)
+             => (lambda (psk)
+                  (cond [(procedure? psk) (psk rs)]
+                        [else psk]))]
+            [else #f]))
 
     ;; --------------------
 
