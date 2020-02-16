@@ -4,7 +4,8 @@
          crypto/all
          "main.rkt")
 
-(crypto-factories (list decaf-factory nettle-factory))
+;;(crypto-factories (list decaf-factory nettle-factory))
+(crypto-factories libcrypto-factory)
 
 ;; (define p (noise-protocol "Noise_NN_25519_ChaChaPoly_SHA512"))
 ;; (define p (noise-protocol "Noise_NK_25519_ChaChaPoly_SHA512"))
