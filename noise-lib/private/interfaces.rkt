@@ -10,11 +10,21 @@
 
 (define key-bytes/c (bytes/len/c 32))
 (define (pub-key-bytes/c x) (and (bytes? x) (>= (bytes-length x) 32)))
+(define (priv-key-bytes/c x) (and (bytes? x) (>= (bytes-length x) 64))) ;; ???
 (define (dh-bytes/c x) (and (bytes? x) (>= (bytes-length x) 32)))
 
 (define handshake-end/c any/c) ;; FIXME
 
-(define (info-hash/c x) (and (hash? x) (immutable? x))) ;; FIXME
+(define info-hash/c
+  (hash/dc [k symbol?]
+           [v (k)
+              (case k
+                [(s e) (or/c #f private-key? priv-key-bytes/c)]
+                [(rs re) (or/c #f pub-key-bytes/c)]
+                [(prologue) (or/c #f bytes?)]
+                [(psk) (or/c #f bytes? (-> pub-key-bytes/c key-bytes/c))]
+                [else none/c])]
+           #:immutable #t))
 
 (define crypto<%>
   (interface ()

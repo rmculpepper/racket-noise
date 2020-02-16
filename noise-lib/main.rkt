@@ -197,7 +197,8 @@
          (handshake-pattern-apply-extension pattern ext)))
      (new protocol%
           (protocol-name (bytes->immutable-bytes (string->bytes/utf-8 protocol-name)))
-          (crypto crypto) (pattern pattern) (extensions exts))]))
+          (extensions (map string->immutable-string exts))
+          (crypto crypto) (pattern pattern))]))
 
 ;; ----------------------------------------
 
@@ -533,7 +534,7 @@
     (define/private (end-of-handshake! hs-end)
       (match hs-end
         [(list* hh cs-w cs-r)
-         (set! hhash hh)
+         (set! hhash (bytes->immutable-bytes hh))
          (set! tstate-w cs-w)
          (set! tstate-r cs-r)
          (set! hstate #f)]))
