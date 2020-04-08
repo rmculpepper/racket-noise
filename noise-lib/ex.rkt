@@ -28,6 +28,9 @@
 (define alice (send p new-initiator alice-info))
 (define bob   (send p new-responder bob-info))
 
+(send alice initialize)
+(send bob initialize)
+
 (define msg1 (send alice write-handshake-message #"hello"))
 (send bob read-handshake-message msg1)
 

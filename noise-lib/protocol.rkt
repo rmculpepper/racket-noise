@@ -342,7 +342,7 @@
 
 (define handshake-state%
   (class* object% (handshake-state<%>)
-    (init protocol)         ;; protocol%
+    (init-field protocol)   ;; protocol%
     (init-field initiator?) ;; Boolean
     (init-field info)       ;; Hash[...], mutated
 
@@ -360,26 +360,25 @@
     ;; --------------------
     ;; Initialization
 
-    (-mix-hash (hash-ref info 'prologue #""))
-    (set! info (hash-remove info 'prologue))
-
-    (let ([pre (handshake-pattern-pre (send protocol get-pattern))])
-      (define (process-pre same-side? mp)
-        (for ([tok (in-list (message-pattern-tokens mp))])
-          (define pk-var (token->info-key same-side? tok))
-          (when pk-var
-            (cond [(hash-ref info pk-var #f)
-                   => (lambda (pk)
-                        (define pk-bytes
-                          (cond [(private-key? pk) (send crypto pk->public-bytes pk)]
-                                [(bytes? pk) pk]))
-                        (-mix-hash pk-bytes))]
-                  [else (error 'handshake-state% "missing key: ~e" tok)]))))
-      (define ((has-dir? dir) mp) (eq? (message-pattern-dir mp) dir))
-      (for ([mp (in-list (filter (has-dir? '->) pre))])
-        (process-pre initiator? mp))
-      (for ([mp (in-list (filter (has-dir? '<-) pre))])
-        (process-pre (not initiator?) mp)))
+    (define/public (initialize prologue)
+      (-mix-hash prologue)
+      (let ([pre (handshake-pattern-pre (send protocol get-pattern))])
+        (define (process-pre same-side? mp)
+          (for ([tok (in-list (message-pattern-tokens mp))])
+            (define pk-var (token->info-key same-side? tok))
+            (when pk-var
+              (cond [(hash-ref info pk-var #f)
+                     => (lambda (pk)
+                          (define pk-bytes
+                            (cond [(private-key? pk) (send crypto pk->public-bytes pk)]
+                                  [(bytes? pk) pk]))
+                          (-mix-hash pk-bytes))]
+                    [else (error 'handshake-state% "missing key: ~e" tok)]))))
+        (define ((has-dir? dir) mp) (eq? (message-pattern-dir mp) dir))
+        (for ([mp (in-list (filter (has-dir? '->) pre))])
+          (process-pre initiator? mp))
+        (for ([mp (in-list (filter (has-dir? '<-) pre))])
+          (process-pre (not initiator?) mp))))
 
     (define-syntax-rule (define-info-var var)
       (define-syntax var (make-hash-key-transformer #'info #'(quote var))))
@@ -410,6 +409,12 @@
     (define/public (can-read-message?)
       (and (pair? mpatterns)
            (eq? (message-pattern-dir (car mpatterns)) (direction 'read))))
+
+    (define/public (next-payload-encrypted?)
+      (or (send sstate has-key?)
+          (and (pair? mpatterns)
+               (for/or ([tok (in-list (message-pattern-tokens (car mpatterns)))])
+                 (memq tok '(ee es se ss psk))))))
 
     ;; next-message-pattern : Symbol (U 'read 'write) -> MessagePattern
     (define/private (next-message-pattern who rw)
@@ -554,6 +559,11 @@
 
     ;; --------------------
 
+    (define/public (initialize [prologue #""])
+      (send hstate initialize prologue))
+
+    ;; --------------------
+
     (define-syntax-rule (with-lock . body)
       ;; FIXME: kill connection on error?
       (let ([go (lambda () . body)])
@@ -591,6 +601,11 @@
       (with-lock
         (cond [hstate (send hstate can-read-message?)]
               [else (and tstate-r #t)])))
+
+    (define/public (next-payload-encrypted?)
+      (with-lock
+        (cond [hstate (send hstate next-payload-encrypted?)]
+              [else #| FIXME? |# #t])))
 
     ;; --------------------
 
