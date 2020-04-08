@@ -2,7 +2,7 @@
 (require racket/class
          crypto
          crypto/all
-         "main.rkt")
+         "protocol.rkt")
 
 ;;(crypto-factories (list decaf-factory nettle-factory))
 (crypto-factories libcrypto-factory)
