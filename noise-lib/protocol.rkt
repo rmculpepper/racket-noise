@@ -158,7 +158,9 @@
       (let* ([s (if (bytes? s) (bytes->private-key s) s)]
              [info (if s  (hash-set info 's  s)  info)]
              [info (if rs (hash-set info 'rs rs) info)])
-        (new connection% (protocol this) (initiator? initiator?) (info info))))
+        (define prologue (hash-ref info 'prologue #""))
+        (new connection% (protocol this) (initiator? initiator?)
+             (info info) (prologue prologue))))
 
     (define/public (new-initiator [info #hasheq()] #:s [s #f] #:rs [rs #f])
       (new-connection #t info #:s s #:rs rs))
