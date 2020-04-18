@@ -605,7 +605,7 @@
     (define/public (next-payload-encrypted?)
       (with-lock
         (cond [hstate (send hstate next-payload-encrypted?)]
-              [else #| FIXME? |# #t])))
+              [else #| transport payloads always encrypted |# #t])))
 
     ;; --------------------
 
