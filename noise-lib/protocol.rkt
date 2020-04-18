@@ -77,6 +77,9 @@
       (for/or ([ext (in-list extensions)])
         (regexp-match? #rx"^psk[0-9]+$" ext)))
 
+    ;; --------------------
+
+    ;; for testing
     (define/public (new-connection initiator? [info '#hash()] #:s [s #f] #:rs [rs #f])
       (let* ([s (if (bytes? s) (bytes->private-key s) s)]
              [info (if s  (hash-set info 's  s)  info)]
@@ -84,13 +87,10 @@
         (define prologue (hash-ref info 'prologue #""))
         (new connection% (protocol this) (initiator? initiator?)
              (info info) (prologue prologue))))
-
     (define/public (new-initiator [info #hasheq()] #:s [s #f] #:rs [rs #f])
       (new-connection #t info #:s s #:rs rs))
     (define/public (new-responder [info #hasheq()] #:s [s #f] #:rs [rs #f])
       (new-connection #f info #:s s #:rs rs))
-
-    ;; --------------------
 
     ;; for testing
     (define/public (trim-info initiator? info)
