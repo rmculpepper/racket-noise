@@ -38,39 +38,48 @@
 ;; - payload
 ;; - padding -- random, must be discarded
 
-(define (noise-socket ...)
-  ...)
-
 (define (length->bytes n) (integer->integer-bytes n 2 #t #f))
 
-(define noise-socket%
+(define socket-state%
   (class object%
-    (init-field connection
+    (init-field initiator?
+                info
                 [transcript-header #"NoiseSocketInit1"]
                 [application-prologue #""])
     (super-new)
 
-    (define connection-initialized? #f)
-    (define transcript (open-output-bytes))
+    (define transcript-prefix #"") ;; Bytes, mutated
+    (define transcript-out (open-output-bytes)) ;; #f/BytesOutputPort, mutated
 
-    ;; reinitialize : (U 'switch 'retry) Connection -> Void
-    (define/public (reinitialize reason new-connection)
-      (set! connection new-connection)
-      (set! connection-initialized? #f)
-      (set! transcript-header
-            (case reason
-              [(switch) #"NoiseSocketInit2"]
-              [(retry) #"NoiseSocketInit3"]
-              [else (error 'reinitialize "bad reason: ~e" reason)])))
+    ;; connection :  (U Connection (Bytes -> Connection)), mutated
+    ;; If procedure, needs prologue before connection is created.
+    (field [connection (reinitialize 'init protocol)])
+
+    ;; --------------------
+
+    ;; reinitialize : (U 'init 'switch 'retry) Protocol -> Void
+    (define/public (reinitialize reason protocol)
+      (define transcript-prefix
+        (case reason
+          [(init) #"NoiseSocketInit1"]
+          [(switch) #"NoiseSocketInit2"]
+          [(retry) #"NoiseSocketInit3"]
+          [else (error 'initialize "bad reason: ~e" reason)]))
+      (set! connection
+            (lambda (prologue)
+              (define prologue
+                (bytes-append transcript-prefix transcript application-prologue))
+              (new connection% (initiator? initiator?) (protocol protocol)
+                   (info info) (prologue prologue)))))
 
     ;; add to transcript and initialize connection if not already initialized
     (define/private (-do-transcript . bss)
       (for ([bs (in-list bss)])
-        (write-bytes bs transcript))
-      (unless connection-initialized?
-        (send connection initialize
-              (bytes-append transcript-header (get-output-bytes transcript) application-prologue))
-        (set! connection-initialized? #t)))
+        (write-bytes bs transcript-out))
+      (when (procedure? connection)
+        (set! connection (connection (get-output-bytes transcript-out)))))
+
+    ;; --------------------
 
     ;; write-handshake-message : Bytes Bytes [Nat] -> Bytes
     (define/public (write-handshake-message negotiation [plaintext #""] [padded-len 0])
@@ -117,14 +126,13 @@
                      (define payload-in (open-input-bytes payload))
                      (define body-len (read-integer 2 #t payload-in))
                      (read-bytes* body-len payload-in)]
-                    [else payload])
-              negotiation))
+                    [else payload])))
 
-    ;; write-message : Bytes -> Bytes
-    (define/public (write-message payload)
+    ;; write-transport-message : Bytes -> Bytes
+    (define/public (write-transport-message payload)
       (send connection write-transport-message payload))
 
-    ;; read-message : Bytes -> Bytes
-    (define/public (read-message msg)
+    ;; read-transport-message : Bytes -> Bytes
+    (define/public (read-transport-message msg)
       (send connection read-transport-message msg))
     ))

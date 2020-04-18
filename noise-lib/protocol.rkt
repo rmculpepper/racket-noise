@@ -345,6 +345,7 @@
     (init-field protocol)   ;; protocol%
     (init-field initiator?) ;; Boolean
     (init-field info)       ;; Hash[...], mutated
+    (init prologue)         ;; Bytes
 
     (define crypto (send protocol get-crypto))
     (define mpatterns ;; (Listof MessagePattern), mutated
@@ -360,7 +361,7 @@
     ;; --------------------
     ;; Initialization
 
-    (define/public (initialize prologue)
+    (begin
       (-mix-hash prologue)
       (let ([pre (handshake-pattern-pre (send protocol get-pattern))])
         (define (process-pre same-side? mp)
@@ -546,21 +547,17 @@
 
 (define connection%
   (class* object% (connection<%>)
-    (init protocol initiator? info)
+    (init protocol initiator? info prologue)
 
     (define hstate ;; #f or handshake-state%, mutated
-      (new handshake-state% (protocol protocol) (initiator? initiator?) (info info)))
+      (new handshake-state% (protocol protocol) (initiator? initiator?)
+           (info info) (prologue prologue)))
     (define tstate-w #f) ;; #f or cipher-state%, mutated
     (define tstate-r #f) ;; #f or cipher-state%, mutated
     (define hhash #f)    ;; #f or bytes, mutated
     (define sema (make-semaphore 1))
 
     (super-new)
-
-    ;; --------------------
-
-    (define/public (initialize [prologue #""])
-      (send hstate initialize prologue))
 
     ;; --------------------
 
