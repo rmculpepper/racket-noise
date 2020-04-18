@@ -566,8 +566,7 @@
 
     (define-syntax-rule (with-lock . body)
       ;; FIXME: kill connection on error?
-      (let ([go (lambda () . body)])
-        (if sema (call-with-semaphore sema go) (go))))
+      (call-with-semaphore sema (lambda () . body)))
 
     (define/public (in-handshake-phase?) (and hstate #t))
     (define/public (in-transport-phase?) (and (or tstate-w tstate-r) #t))
@@ -611,8 +610,9 @@
 
     (define/public (write-handshake-message payload)
       (with-lock
-        (unless (in-handshake-phase?)
-          (error 'write-handshake-message "not in handshake phase"))
+        (unless (and hstate (send hstate can-write-message?))
+          (error 'write-handshake-message "cannot write handshake message~a"
+                 (describe-state)))
         (define-values (msg hs-end)
           (send hstate write-handshake-message payload))
         (when hs-end (end-of-handshake! hs-end))
@@ -620,8 +620,9 @@
 
     (define/public (read-handshake-message msg)
       (with-lock
-        (unless (in-handshake-phase?)
-          (error 'read-handshake-message "not in handshake phase"))
+        (unless (and hstate (send hstate can-read-message?))
+          (error 'read-handshake-message "cannot read handshake message~a"
+                 (describe-state)))
         (define-values (payload hs-end)
           (send hstate read-handshake-message msg))
         (when hs-end (end-of-handshake! hs-end))
@@ -631,20 +632,34 @@
 
     (define/public (write-transport-message payload)
       (with-lock
-        (unless (in-transport-phase?)
-          (error 'write-transport-message "not in transport phase"))
         (unless tstate-w
-          (error 'write-transport-message "not allowed to send transport messages"))
+          (error 'write-transport-message "cannot write transport message~a"
+                 (describe-state)))
         (send tstate-w encrypt-with-ad #"" payload)))
 
     (define/public (read-transport-message msg)
       (with-lock
-        (unless (in-transport-phase?)
-          (error 'read-transport-message "not in transport phase"))
         (unless tstate-r
-          (error 'read-transport-message "not allowed to receive transport messages"))
+          (error 'read-transport-message "cannot read transport message~a"
+                 (describe-state)))
         (send tstate-r decrypt-with-ad #"" msg)))
 
-    ))
+    ;; --------------------
 
-;; Meta: next-write-security, next-read-security -- src/dest security levels?
+    (define/private (describe-state)
+      (cond [hstate
+             (cond [(send hstate can-write-message?)
+                    ";\n in handshake phase (expecting write)"]
+                   [(send hstate can-read-message?)
+                    ";\n in handshake phase (expecting read)"]
+                   [else
+                    ";\n INTERNAL ERROR: in handshake phase but cannot read or write"])]
+            [(and tstate-w tstate-r)
+             ";\n in transport phase (can read or write)"]
+            [tstate-w
+             ";\n in transport phase (can write, cannot read)"]
+            [tstate-r
+             ";\n in transport phase (can read, cannot write)"]
+            [else
+             ";\n not connected"]))
+    ))
