@@ -31,6 +31,10 @@
 
   ;; Token = (U 'e 's 'ee 'es 'se 'ss 'psk)
 
+  (define (pre-token? x) (case x [(e s) #t] [else #f]))
+  (define (pre-token->self-key x) (case x [(e) 'e]  [(s) 's]  [else #f]))
+  (define (pre-token->peer-key x) (case x [(e) 're] [(s) 'rs] [else #f]))
+
   ;; SecProp = (secprop Nat Nat)
   ;; Indicates that a payload is allowed and describes its authentication and
   ;; confidentiality properties. Numbers are specified in Section 7.7 (rev 34).
@@ -481,6 +485,9 @@
 (define (fallback-handshake-pattern* hp)
   (define (merge-pre mp pre)
     (match-define (message-pattern m-dir m-tokens _) mp)
+    (for ([m-tok (in-list m-tokens)])
+      (unless (pre-token? m-tok)
+        (error 'fallback-handshake-pattern "cannot use token in pre-message\n  token: ~e" m-tok)))
     (let loop ([pre pre])
       (match pre
         ['() (list (message-pattern m-dir m-tokens #f))]
