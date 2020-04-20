@@ -32,6 +32,8 @@
   ;; Token = (U 'e 's 'ee 'es 'se 'ss 'psk)
 
   (define (pre-token? x) (case x [(e s) #t] [else #f]))
+  (define (pre-token->info-key from-self? x)
+    (if from-self? (pre-token->self-key x) (pre-token->peer-key x)))
   (define (pre-token->self-key x) (case x [(e) 'e]  [(s) 's]  [else #f]))
   (define (pre-token->peer-key x) (case x [(e) 're] [(s) 'rs] [else #f]))
 
