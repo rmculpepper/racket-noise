@@ -47,8 +47,7 @@
 
     (define transcript-out (open-output-bytes)) ;; #f/BytesOutputPort, mutated
 
-    ;; connection : (U #f Connection (Bytes -> Connection)), mutated
-    ;; If procedure, needs transcript (=> prologue) before connection is created.
+    ;; connection : (U #f pre-connection% connection%), mutated
     (field [connection #f])
 
     ;; --------------------
@@ -60,25 +59,27 @@
           [(init) #"NoiseSocketInit1"]
           [(switch) #"NoiseSocketInit2"]
           [(retry) #"NoiseSocketInit3"]
-          [else (error 'initialize "bad reason: ~e" reason)]))
+          [else (error '|socket-base% initialize| "bad reason: ~e" reason)]))
+      (send protocol check-info-keys '|socket-base% initialize| initiator? info)
       (set! connection
-            (lambda (transcript)
-              (define prologue
-                (bytes-append transcript-prefix transcript application-prologue))
-              (new connection% (protocol protocol) (initiator? initiator?)
-                   (info info) (prologue prologue)))))
+            (new pre-connection% (protocol protocol) (initiator? initiator?)
+                 (prefix transcript-prefix) (suffix application-prologue)
+                 (info info))))
 
-    ;; add to transcript and initialize connection if not already initialized
+    ;; add to transcript and complete connection if not already connected
     (define/private (do-transcript . bss)
       (when transcript-out
         (for ([bs (in-list bss)])
           (write-integer (bytes-length bs) 2 #f transcript-out)
           (write-bytes bs transcript-out))
-        (when (procedure? connection)
-          (set! connection (connection (get-output-bytes transcript-out))))))
+        (when (is-a? connection pre-connection%)
+          (set! connection (send connection connect (get-output-bytes transcript-out))))))
 
     (define/public (discard-transcript!)
       (set! transcript-out #f))
+
+    (define/public (check-initialized who)
+      (unless connection (error who "not initialized")))
 
     ;; --------------------
 
@@ -89,6 +90,7 @@
 
     ;; write-handshake-message : Bytes Bytes [Nat] -> Void
     (define/public (write-handshake-message negotiation [plaintext #""] [padded-len 0])
+      (check-initialized 'write-handshake-message)
       (do-transcript negotiation)
       (write-frame negotiation #f)
       (define noise-message
@@ -104,46 +106,49 @@
 
     ;; --------------------
 
-    ;; read-handshake-message : -> (values Bytes Bytes)
-    (define/public (read-handshake-message)
-      (define negotiation (read-handshake-negotiation-frame))
-      (define message (read-handshake-noise-message-frame))
-      (values negotiation message))
-
-    (define/public (read-handshake-negotiation-frame)
+    ;; read-handshake-message : -> (values Bytes (U Bytes 'bad))
+    (define/public (read-handshake-message #:allow-bad-noise-message? [allow-bad? #f])
+      (check-initialized 'read-handshake-message)
       (define negotiation (read-frame))
       (do-transcript negotiation)
-      negotiation)
-
-    (define/public (read-handshake-noise-message-frame)
       (define noise-message (read-frame))
       (do-transcript noise-message)
       (define encrypted? (send connection next-payload-encrypted?))
-      (define payload (send connection read-handshake-message noise-message))
-      (if encrypted?
-          (read-frame-from-bytes 'read-handshake-noise-message-frame payload)
-          payload))
+      (define payload
+        (with-handlers ([auth-decrypt-exn? (lambda (e) (if allow-bad? 'bad (raise e)))])
+          (send connection read-handshake-message noise-message)))
+      (define message
+        (cond [(eq? payload 'bad) 'bad]
+              [encrypted?
+               (read-frame-from-bytes 'read-handshake-message payload)]
+              [else payload]))
+      (values negotiation message))
 
     ;; --------------------
 
     ;; write-transport-message : Bytes -> Void
     (define/public (write-transport-message payload)
+      (check-initialized 'write-transport-message)
       (write-frame (send connection write-transport-message payload)))
 
     ;; read-transport-message : -> Bytes
     (define/public (read-transport-message)
+      (check-initialized 'read-transport-message)
       (send connection read-transport-message (read-frame)))
 
     ;; ----------------------------------------
-    ;; Forward to connection
+    ;; Connection-state methods (forward to connection)
 
-    ;; FIXME: handle delayed connection construction
-    (define/public (in-handshake-phase?) (send connection in-handshake-phase?))
-    (define/public (in-transport-phase?) (send connection in-transport-phase?))
-    (define/public (get-handshake-hash) (send connection get-handshake-hash))
-    (define/public (can-write-message?) (send connection can-write-message?))
-    (define/public (can-read-message?) (send connection can-read-message?))
+    (define-syntax-rule (forward m a ...) (send (or connection not-connected) m a ...))
+    (define/public (in-handshake-phase?) (forward in-handshake-phase?))
+    (define/public (in-transport-phase?) (forward in-transport-phase?))
+    (define/public (get-handshake-hash) (forward get-handshake-hash))
+    (define/public (can-write-message?) (forward can-write-message?))
+    (define/public (can-read-message?) (forward can-read-message?))
     ))
+
+(define (auth-decrypt-exn? e)
+  (and (exn? e) (regexp-match? #rx"authenticated decryption failed" (exn-message e))))
 
 ;; read-frame-from-bytes : Bytes -> Bytes
 (define (read-frame-from-bytes who bs)
@@ -153,6 +158,43 @@
   (when (< (bytes-length bs) (+ 2 len))
     (error who "invalid frame"))
   (subbytes bs 2 (+ 2 len)))
+
+(define not-connected%
+  (class object%
+    (super-new)
+    ;; Connection-state methods
+    (define/public (in-handshake-phase?) #f)
+    (define/public (in-transport-phase?) #f)
+    (define/public (get-handshake-hash)
+      (error 'get-handshake-hash "handshake is not finished (not connected)"))
+    (define/public (can-write-message?) (error 'can-write-message? "not connected"))
+    (define/public (can-read-message?) (error 'can-read-messge? "not connected"))
+    ))
+
+(define not-connected (new not-connected%))
+
+;; A pre-connection needs transcript (=> prologue) to create connection.
+(define pre-connection%
+  (class object%
+    (init-field protocol initiator? info prefix suffix)
+    (super-new)
+
+    (define/public (connect transcript)
+      (define prologue (bytes-append prefix transcript suffix))
+      (new connection% (protocol protocol) (initiator? initiator?)
+           (info info) (prologue prologue)))
+
+    ;; Connection-state methods
+    (define/public (in-handshake-phase?) #f)
+    (define/public (in-transport-phase?) #f)
+    (define/public (get-handshake-hash)
+      (error 'get-handshake-hash "handshake is not finished"))
+    ;; The following methods answer from the perspective of the socket, which
+    ;; implicitly calls connect. That is, these answer whose turn it is, not
+    ;; whether connection is initialized. (FIXME: maybe rename methods?)
+    (define/public (can-write-message?) initiator?)
+    (define/public (can-read-message?) (not initiator?))
+    ))
 
 ;; ----------------------------------------
 
@@ -172,7 +214,3 @@
       (b-read-bytes inr len))
 
     ))
-
-
-;; NEW PLAN
-;; add set-prologue to connection%
