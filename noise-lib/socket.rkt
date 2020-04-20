@@ -52,22 +52,34 @@
 
     ;; --------------------
 
+    (define sema (make-semaphore 1))
+
+    (define-syntax-rule (with-lock . body)
+      ;; FIXME: kill connection on error?
+      (call-with-semaphore sema (lambda () . body)))
+
+    ;; --------------------
+
     ;; initialize : (U 'init 'switch 'retry) Protocol Boolean InfoHash -> Void
     (define/public (initialize reason protocol initiator? info)
-      (define transcript-prefix
-        (case reason
-          [(init) #"NoiseSocketInit1"]
-          [(switch) #"NoiseSocketInit2"]
-          [(retry) #"NoiseSocketInit3"]
-          [else (error '|socket-base% initialize| "bad reason: ~e" reason)]))
-      (send protocol check-info-keys '|socket-base% initialize| initiator? info)
-      (set! connection
-            (new pre-connection% (protocol protocol) (initiator? initiator?)
-                 (prefix transcript-prefix) (suffix application-prologue)
-                 (info info))))
+      (with-lock
+        (define transcript-prefix
+          (case reason
+            [(init) #"NoiseSocketInit1"]
+            [(switch) #"NoiseSocketInit2"]
+            [(retry) #"NoiseSocketInit3"]
+            [else (error '|socket-base% initialize| "bad reason: ~e" reason)]))
+        (send protocol check-info-keys '|socket-base% initialize| initiator? info)
+        (set! connection
+              (new pre-connection% (protocol protocol) (initiator? initiator?)
+                   (prefix transcript-prefix) (suffix application-prologue)
+                   (info info)))))
+
+    (define/public (discard-transcript!)
+      (with-lock (set! transcript-out #f)))
 
     ;; add to transcript and complete connection if not already connected
-    (define/private (do-transcript . bss)
+    (define/private (-do-transcript . bss)
       (when transcript-out
         (for ([bs (in-list bss)])
           (write-integer (bytes-length bs) 2 #f transcript-out)
@@ -75,24 +87,21 @@
         (when (is-a? connection pre-connection%)
           (set! connection (send connection connect (get-output-bytes transcript-out))))))
 
-    (define/public (discard-transcript!)
-      (set! transcript-out #f))
-
-    (define/public (check-initialized who)
+    (define/private (-check-initialized who)
       (unless connection (error who "not initialized")))
 
     ;; --------------------
 
-    (abstract write-frame) ;; Bytes [Boolean] -> Void
-    (abstract read-frame)  ;; -> Bytes
+    (abstract -write-frame) ;; Bytes [Boolean] -> Void
+    (abstract -read-frame)  ;; -> Bytes
 
     ;; --------------------
 
     ;; write-handshake-message : Bytes Bytes [Nat] -> Void
     (define/public (write-handshake-message negotiation [plaintext #""] [padded-len 0])
-      (check-initialized 'write-handshake-message)
-      (do-transcript negotiation)
-      (write-frame negotiation #f)
+      (-check-initialized 'write-handshake-message)
+      (-do-transcript negotiation)
+      (-write-frame negotiation #f)
       (define noise-message
         (send connection write-handshake-message
               (cond [(send connection next-payload-encrypted?)
@@ -101,18 +110,18 @@
                                    plaintext
                                    (crypto-random-bytes (max 0 (- padded-len plaintext-len))))]
                     [else plaintext])))
-      (do-transcript noise-message)
-      (write-frame noise-message))
+      (-do-transcript noise-message)
+      (-write-frame noise-message))
 
     ;; --------------------
 
     ;; read-handshake-message : -> (values Bytes (U Bytes 'bad))
     (define/public (read-handshake-message #:allow-bad-noise-message? [allow-bad? #f])
-      (check-initialized 'read-handshake-message)
-      (define negotiation (read-frame))
-      (do-transcript negotiation)
-      (define noise-message (read-frame))
-      (do-transcript noise-message)
+      (-check-initialized 'read-handshake-message)
+      (define negotiation (-read-frame))
+      (-do-transcript negotiation)
+      (define noise-message (-read-frame))
+      (-do-transcript noise-message)
       (define encrypted? (send connection next-payload-encrypted?))
       (define payload
         (with-handlers ([auth-decrypt-exn? (lambda (e) (if allow-bad? 'bad (raise e)))])
@@ -128,13 +137,13 @@
 
     ;; write-transport-message : Bytes -> Void
     (define/public (write-transport-message payload)
-      (check-initialized 'write-transport-message)
-      (write-frame (send connection write-transport-message payload)))
+      (-check-initialized 'write-transport-message)
+      (-write-frame (send connection write-transport-message payload)))
 
     ;; read-transport-message : -> Bytes
     (define/public (read-transport-message)
-      (check-initialized 'read-transport-message)
-      (send connection read-transport-message (read-frame)))
+      (-check-initialized 'read-transport-message)
+      (send connection read-transport-message (-read-frame)))
 
     ;; ----------------------------------------
     ;; Connection-state methods (forward to connection)
@@ -204,12 +213,12 @@
     (field [inr (make-binary-reader in)])
     (super-new)
 
-    (define/override (write-frame bs [flush? #t])
+    (define/override (-write-frame bs [flush? #t])
       (write-integer (bytes-length bs) 2 #f out)
       (write-bytes bs out)
       (when flush? (flush-output out)))
 
-    (define/override (read-frame)
+    (define/override (-read-frame)
       (define len (b-read-integer inr 2 #f))
       (b-read-bytes inr len))
 
