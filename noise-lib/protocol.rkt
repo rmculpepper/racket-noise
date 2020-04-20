@@ -473,12 +473,16 @@
   (class* object% (connection<%>)
     (init protocol initiator? info prologue)
 
-    (define hstate ;; #f or handshake-state%, mutated
+    ;; States:
+    ;; - handshake  : hstate is handshake-state%, tstate-* = #f
+    ;; - transport  : hstate = #f, one or both tstate-* is cipher-state%
+    ;; - dead       : hstate = tstate-* = #f
+    (define hstate       ;; #f or handshake-state%, mutated
       (new handshake-state% (protocol protocol) (initiator? initiator?)
            (info info) (prologue prologue)))
     (define tstate-w #f) ;; #f or cipher-state%, mutated
     (define tstate-r #f) ;; #f or cipher-state%, mutated
-    (define hhash #f)    ;; #f or bytes, mutated
+    (define hhash #f)    ;; #f or Bytes, mutated
     (define sema (make-semaphore 1))
 
     (super-new)
