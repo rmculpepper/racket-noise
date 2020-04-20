@@ -2,6 +2,20 @@
 (require racket/match
          racket/port
          racket/promise)
+(provide Message
+         Wrap
+         Map
+         Enum
+
+         write-length-tagged-message
+         write-message
+         message->bytes
+
+         read-length-tagged-message
+         read-message
+         bytes->message)
+
+;; ============================================================
 
 ;; CType = Type | (t:repeat Type) | (t:wrap CType (X -> Value) (Value -> X))
 ;; A CType is an extended type that describes fields ("components"),
@@ -369,51 +383,55 @@
 
 ;; ============================================================
 
-(define SearchRequest
-  (Message
-   [1 query            'string]
-   [2 page_number      'int32]
-   [3 results_per_page 'int32]))
+(module+ test
+  (provide (all-defined-out))
 
-(define Result
-  (Message
-   [1 url 'string]
-   [2 title 'string]
-   #:repeated
-   [3 snippets 'string]
-   [4 words (Map 'string 'uint32)]))
+  (define SearchRequest
+    (Message
+     [1 query            'string]
+     [2 page_number      'int32]
+     [3 results_per_page 'int32]))
 
-(define SearchResponse
-  (Message
-   #:repeated
-   [1 results Result]))
+  (define Result
+    (Message
+     [1 url 'string]
+     [2 title 'string]
+     #:repeated
+     [3 snippets 'string]
+     [4 words (Map 'string 'uint32)]))
 
-(define sr1
-  (hash 'results
-        (list (hash 'url "http://here" 'title "Here" 'snippets '("I am" "we go again")
-                    'words (hash "zz" 1 "yy" 2))
-              (hash 'url "http://be" 'title "Be" 'snippets '("witched")))))
+  (define SearchResponse
+    (Message
+     #:repeated
+     [1 results Result]))
 
-(define enc-sr1 (message->bytes SearchResponse sr1))
-(define dec-sr1 (bytes->message SearchResponse enc-sr1))
+  (define sr1
+    (hash 'results
+          (list (hash 'url "http://here" 'title "Here" 'snippets '("I am" "we go again")
+                      'words (hash "zz" 1 "yy" 2))
+                (hash 'url "http://be" 'title "Be" 'snippets '("witched")))))
 
-;; ----
+  (define enc-sr1 (message->bytes SearchResponse sr1))
+  (define dec-sr1 (bytes->message SearchResponse enc-sr1))
 
-(define BranchTree
-  (Message
-   [1 left (delay BinTree)]
-   [2 right (delay BinTree)]))
-(define BinTree
-  (Message
-   #:oneof
-   [[1 leaf 'int32]
-    [2 branch BranchTree]]))
+  ;; ----
 
-(define t1
-  (hash 'branch (hash 'left (hash 'leaf 12)
-                      'right (hash 'branch
-                                   (hash 'left (hash 'leaf 17)
-                                         'right (hash 'leaf 28))))))
+  (define BranchTree
+    (Message
+     [1 left (delay BinTree)]
+     [2 right (delay BinTree)]))
+  (define BinTree
+    (Message
+     #:oneof
+     [[1 leaf 'int32]
+      [2 branch BranchTree]]))
 
-(define enc-t1 (message->bytes BinTree t1))
-(define dec-t1 (bytes->message BinTree enc-t1))
+  (define t1
+    (hash 'branch (hash 'left (hash 'leaf 12)
+                        'right (hash 'branch
+                                     (hash 'left (hash 'leaf 17)
+                                           'right (hash 'leaf 28))))))
+
+  (define enc-t1 (message->bytes BinTree t1))
+  (define dec-t1 (bytes->message BinTree enc-t1))
+  )
