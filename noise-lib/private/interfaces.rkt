@@ -19,10 +19,9 @@
   (hash/dc [k symbol?]
            [v (k)
               (case k
-                [(s e) (or/c #f private-key? priv-key-bytes/c)]
-                [(rs re) (or/c #f pub-key-bytes/c)]
-                [(prologue) (or/c #f bytes?)]
-                [(psk) (or/c #f bytes? (-> pub-key-bytes/c key-bytes/c))]
+                [(s e) (or/c private-key? priv-key-bytes/c)]
+                [(rs re) (or/c pub-key-bytes/c)]
+                [(psk) (or/c bytes? (-> pub-key-bytes/c key-bytes/c))]
                 [else none/c])]
            #:immutable #t))
 
