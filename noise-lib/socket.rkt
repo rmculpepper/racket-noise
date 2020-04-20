@@ -9,6 +9,7 @@
          (prefix-in crypto: crypto)
          binaryio/bytes
          binaryio/integer
+         binaryio/reader
          "private/interfaces.rkt"
          "private/patterns.rkt"
          "private/protocol-name.rkt"
@@ -39,9 +40,7 @@
 ;; - payload
 ;; - padding -- random, must be discarded
 
-(define (length->bytes n) (integer->integer-bytes n 2 #t #f))
-
-(define socket-state%
+(define socket-base%
   (class object%
     (init-field [application-prologue #""])
     (super-new)
@@ -69,76 +68,111 @@
               (new connection% (protocol protocol) (initiator? initiator?)
                    (info info) (prologue prologue)))))
 
-    (define/private (check-initialized who)
-      (unless connection (error who "not initialized")))
-
     ;; add to transcript and initialize connection if not already initialized
-    (define/private (-do-transcript . bss)
+    (define/private (do-transcript . bss)
       (when transcript-out
         (for ([bs (in-list bss)])
+          (write-integer (bytes-length bs) 2 #f transcript-out)
           (write-bytes bs transcript-out))
         (when (procedure? connection)
           (set! connection (connection (get-output-bytes transcript-out))))))
 
+    (define/public (discard-transcript!)
+      (set! transcript-out #f))
+
     ;; --------------------
 
-    ;; write-handshake-message : Bytes Bytes [Nat] -> Bytes
+    (abstract write-frame) ;; Bytes [Boolean] -> Void
+    (abstract read-frame)  ;; -> Bytes
+
+    ;; --------------------
+
+    ;; write-handshake-message : Bytes Bytes [Nat] -> Void
     (define/public (write-handshake-message negotiation [plaintext #""] [padded-len 0])
-      (check-initialized 'write-handshake-message)
-      (define negotiation-len (length->bytes negotiation))
-      (-do-transcript negotiation-len negotiation)
-      (define message
+      (do-transcript negotiation)
+      (write-frame negotiation #f)
+      (define noise-message
         (send connection write-handshake-message
               (cond [(send connection next-payload-encrypted?)
                      (define plaintext-len (bytes-length plaintext))
-                     (bytes-append (length->bytes plaintext-len)
+                     (bytes-append (integer->integer-bytes plaintext-len 2 #f #t)
                                    plaintext
                                    (crypto-random-bytes (max 0 (- padded-len plaintext-len))))]
                     [else plaintext])))
-      (define message-len (length->bytes (bytes-length message)))
-      (-do-transcript message-len message)
-      (bytes-append negotiation-len
-                    negotiation
-                    message-len
-                    message))
+      (do-transcript noise-message)
+      (write-frame noise-message))
 
-    ;; peek-handshake-message : Bytes -> Bytes
-    ;; Note: does not write to transcript.
-    (define/public (peek-handshake-negotiation msg)
-      (check-initialized 'peek-handshake-message)
-      (define msg-in (open-input-bytes msg))
-      (define negotiation-len (read-integer 2 #t msg-in))
-      (define negotiation (read-bytes* negotiation-len msg-in))
+    ;; --------------------
+
+    ;; read-handshake-message : -> (values Bytes Bytes)
+    (define/public (read-handshake-message)
+      (define negotiation (read-handshake-negotiation-frame))
+      (define message (read-handshake-noise-message-frame))
+      (values negotiation message))
+
+    (define/public (read-handshake-negotiation-frame)
+      (define negotiation (read-frame))
+      (do-transcript negotiation)
       negotiation)
 
-    ;; read-handshake-message : Bytes -> (values Bytes Bytes)
-    (define/public (read-handshake-message msg)
-      (check-initialized 'read-handshake-message)
-      (define msg-in (open-input-bytes msg))
-      (define negotiation-len (read-integer 2 #t msg-in))
-      (define negotiation (read-bytes* negotiation-len msg-in))
-      (-do-transcript (length->bytes negotiation-len) negotiation)
-      (define message-len (read-integer 2 #t msg-in))
-      (define message (read-bytes* message-len msg-in))
-      (unless (eof-object? (peek-byte msg-in))
-        (error 'read-handshake-message "bytes left over"))
-      (-do-transcript (length->bytes message-len) message)
+    (define/public (read-handshake-noise-message-frame)
+      (define noise-message (read-frame))
+      (do-transcript noise-message)
       (define encrypted? (send connection next-payload-encrypted?))
-      (define payload (send connection read-handshake-message message))
-      (values negotiation
-              (cond [encrypted?
-                     (define payload-in (open-input-bytes payload))
-                     (define body-len (read-integer 2 #t payload-in))
-                     (read-bytes* body-len payload-in)]
-                    [else payload])))
+      (define payload (send connection read-handshake-message noise-message))
+      (if encrypted?
+          (read-frame-from-bytes 'read-handshake-noise-message-frame payload)
+          payload))
 
-    ;; write-transport-message : Bytes -> Bytes
+    ;; --------------------
+
+    ;; write-transport-message : Bytes -> Void
     (define/public (write-transport-message payload)
-      (check-initialized 'write-transport-message)
-      (send connection write-transport-message payload))
+      (write-frame (send connection write-transport-message payload)))
 
-    ;; read-transport-message : Bytes -> Bytes
-    (define/public (read-transport-message msg)
-      (check-initialized 'read-transport-message)
-      (send connection read-transport-message msg))
+    ;; read-transport-message : -> Bytes
+    (define/public (read-transport-message)
+      (send connection read-transport-message (read-frame)))
+
+    ;; ----------------------------------------
+    ;; Forward to connection
+
+    ;; FIXME: handle delayed connection construction
+    (define/public (in-handshake-phase?) (send connection in-handshake-phase?))
+    (define/public (in-transport-phase?) (send connection in-transport-phase?))
+    (define/public (get-handshake-hash) (send connection get-handshake-hash))
+    (define/public (can-write-message?) (send connection can-write-message?))
+    (define/public (can-read-message?) (send connection can-read-message?))
     ))
+
+;; read-frame-from-bytes : Bytes -> Bytes
+(define (read-frame-from-bytes who bs)
+  (when (< (bytes-length bs) 2)
+    (error who "invalid frame (missing length bytes)"))
+  (define len (integer-bytes->integer bs #f #t 0 2))
+  (when (< (bytes-length bs) (+ 2 len))
+    (error who "invalid frame"))
+  (subbytes bs 2 (+ 2 len)))
+
+;; ----------------------------------------
+
+(define socket%
+  (class socket-base%
+    (init-field in out)
+    (field [inr (make-binary-reader in)])
+    (super-new)
+
+    (define/override (write-frame bs [flush? #t])
+      (write-integer (bytes-length bs) 2 #f out)
+      (write-bytes bs out)
+      (when flush? (flush-output out)))
+
+    (define/override (read-frame)
+      (define len (b-read-integer inr 2 #f))
+      (b-read-bytes inr len))
+
+    ))
+
+
+;; NEW PLAN
+;; add set-prologue to connection%
