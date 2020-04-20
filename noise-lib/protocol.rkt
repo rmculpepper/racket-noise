@@ -1,6 +1,7 @@
 #lang racket/base
 (require (for-syntax racket/base)
          racket/class
+         racket/list
          racket/match
          racket/string
          racket/port
@@ -77,6 +78,20 @@
       (for/or ([ext (in-list extensions)])
         (regexp-match? #rx"^psk[0-9]+$" ext)))
 
+    (define/public (get-info-keys initiator?)
+      (append*
+       (for/list ([mp (in-list (handshake-pattern-pre pattern))])
+         (define self? (eq? (message-pattern-dir mp) (if initiator? '-> '<-)))
+         (for/list ([tok (in-list (message-pattern-tokens mp))])
+           (or (if self? (pre-token->self-key tok) (pre-token->peer-key tok))
+               (error 'get-info-keys "INTERNAL ERROR: invalid pre-message token: ~e" tok))))))
+
+    (define/public (check-info-keys who initiator? info)
+      ;; PRE: info keys, if present, have correct values (see info-hash/c)
+      (for ([key (in-list (get-info-keys initiator?))])
+        (unless (hash-has-key? info key)
+          (error who "info missing required key\n  key: ~e" key))))
+
     ;; --------------------
 
     ;; for testing
@@ -94,13 +109,8 @@
 
     ;; for testing
     (define/public (trim-info initiator? info)
-      (define keys
-        (filter values
-                (for*/list ([mp (in-list (handshake-pattern-pre pattern))]
-                            [token (in-list (message-pattern-tokens mp))])
-                  (define from-self? (eq? (eq? (message-pattern-dir mp) '->) initiator?))
-                  (token->info-key token from-self?))))
-      (for/fold ([info info]) ([(k v) (in-hash info)])
+      (define keys (get-info-keys initiator?))
+      (for/fold ([info info]) ([k (in-hash-keys info)])
         (cond [(memq k keys) info]
               [(not (memq k '(rs re))) info]
               [else (hash-remove info k)])))
@@ -287,19 +297,17 @@
     ;; Initialization
 
     (begin
+      (send protocol check-info-keys 'handshake-state% initiator? info)
       (-mix-hash prologue)
       (let ([pre (handshake-pattern-pre (send protocol get-pattern))])
         (define (process-pre same-side? mp)
           (for ([tok (in-list (message-pattern-tokens mp))])
-            (define pk-var (token->info-key same-side? tok))
-            (when pk-var
-              (cond [(hash-ref info pk-var #f)
-                     => (lambda (pk)
-                          (define pk-bytes
-                            (cond [(private-key? pk) (send crypto pk->public-bytes pk)]
-                                  [(bytes? pk) pk]))
-                          (-mix-hash pk-bytes))]
-                    [else (error 'handshake-state% "missing key: ~e" tok)]))))
+            (define pk-var (pre-token->info-key same-side? tok))
+            (define pk (hash-ref info pk-var))
+            (define pk-bytes
+              (cond [(private-key? pk) (send crypto pk->public-bytes pk)]
+                    [(bytes? pk) pk]))
+            (-mix-hash pk-bytes)))
         (define ((has-dir? dir) mp) (eq? (message-pattern-dir mp) dir))
         (for ([mp (in-list (filter (has-dir? '->) pre))])
           (process-pre initiator? mp))
@@ -325,6 +333,8 @@
             [else #f]))
 
     ;; --------------------
+
+    (define/public (get-info) info)
 
     (define/public (direction rw)
       (get-direction initiator? rw))
@@ -367,7 +377,6 @@
     (define/public (write-handshake-message payload)
       (define who 'write-handshake-message)
       (define mp (next-message-pattern who 'write))
-      ;; (eprintf "WRITE ~v\n" mp)
       (define out (open-output-bytes))
       (-write-message:pattern who mp out)
       (define enc-payload (-encrypt-and-hash payload))
@@ -379,13 +388,9 @@
         (-write-message:token who sym out)))
 
     (define/public (-write-message:token who sym out)
-      (define (do-dh sk pk)
-        (unless sk (error who "private key not set, token = ~e" sym))
-        (unless pk (error who "peer public key not set, token = ~e" sym))
-        (-mix-key (send crypto dh sk pk)))
+      (define (do-dh sk pk) (-mix-key (send crypto dh sk pk)))
       (case sym
         [(e)
-         (when e (error who "ephemeral key already set"))
          (set! e (send crypto generate-private-key))
          (define e-pub (send crypto pk->public-bytes e))
          (write-bytes e-pub out)
@@ -393,7 +398,6 @@
          (when using-psk?
            (-mix-key e-pub))]
         [(s)
-         (unless s (error who "static key not set"))
          (define s-pub (send crypto pk->public-bytes s))
          (define enc-s-pub (-encrypt-and-hash s-pub))
          (write-bytes enc-s-pub out)]
@@ -403,7 +407,7 @@
         [(ss) (do-dh s rs)]
         [(psk)
          (cond [(get-psk) => (lambda (psk) (-mix-key-and-hash psk))]
-               [else (error who "could not get pre-shared key")])]
+               [else (error who "could not get PSK")])]
         [else (error who "internal error: unknown token: ~e" sym)]))
 
     ;; --------------------
@@ -412,7 +416,6 @@
     (define/public (read-handshake-message msg)
       (define who 'read-handshake-message)
       (define mp (next-message-pattern who 'read))
-      ;; (eprintf "READ  ~v\n" mp)
       (define msg-in (open-input-bytes msg))
       (-read-message:pattern who mp msg-in)
       (define enc-payload (port->bytes msg-in))
@@ -424,10 +427,7 @@
         (-read-message:token who sym msg-in)))
 
     (define/public (-read-message:token who sym msg-in)
-      (define (do-dh sk pk)
-        (unless sk (error who "private key not set, token = ~e" sym))
-        (unless pk (error who "peer public key not set, token = ~e" sym))
-        (-mix-key (send crypto dh sk pk)))
+      (define (do-dh sk pk) (-mix-key (send crypto dh sk pk)))
       (case sym
         [(e)
          (set! re (read-bytes* (send crypto get-dhlen) msg-in))
@@ -435,7 +435,6 @@
          (when using-psk?
            (-mix-key re))]
         [(s)
-         (when rs (error who "peer static key already set"))
          (define enc-rs
            (let ([len (+ (send crypto get-dhlen) (if (-has-key?) AUTHLEN 0))])
              (read-bytes* len msg-in)))
@@ -446,7 +445,7 @@
         [(ss) (do-dh s rs)]
         [(psk)
          (cond [(get-psk) => (lambda (psk) (-mix-key-and-hash psk))]
-               [else (error who "could not get pre-shared key")])]
+               [else (error who "could not get PSK")])]
         [else (error who "internal error: unknown token: ~e" sym)]))
 
     ;; --------------------
