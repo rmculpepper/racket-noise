@@ -11,7 +11,8 @@
          binaryio/integer
          "private/interfaces.rkt"
          "private/patterns.rkt"
-         "private/protocol-name.rkt")
+         "private/protocol-name.rkt"
+         "protocol.rkt")
 (provide (all-defined-out))
 
 ;; Reference: https://noisesocket.org/spec/noisesocket/
@@ -42,23 +43,19 @@
 
 (define socket-state%
   (class object%
-    (init-field initiator?
-                info
-                [transcript-header #"NoiseSocketInit1"]
-                [application-prologue #""])
+    (init-field [application-prologue #""])
     (super-new)
 
-    (define transcript-prefix #"") ;; Bytes, mutated
     (define transcript-out (open-output-bytes)) ;; #f/BytesOutputPort, mutated
 
-    ;; connection :  (U Connection (Bytes -> Connection)), mutated
-    ;; If procedure, needs prologue before connection is created.
-    (field [connection (reinitialize 'init protocol)])
+    ;; connection : (U #f Connection (Bytes -> Connection)), mutated
+    ;; If procedure, needs transcript (=> prologue) before connection is created.
+    (field [connection #f])
 
     ;; --------------------
 
-    ;; reinitialize : (U 'init 'switch 'retry) Protocol -> Void
-    (define/public (reinitialize reason protocol)
+    ;; initialize : (U 'init 'switch 'retry) Protocol Boolean InfoHash -> Void
+    (define/public (initialize reason protocol initiator? info)
       (define transcript-prefix
         (case reason
           [(init) #"NoiseSocketInit1"]
@@ -66,25 +63,30 @@
           [(retry) #"NoiseSocketInit3"]
           [else (error 'initialize "bad reason: ~e" reason)]))
       (set! connection
-            (lambda (prologue)
+            (lambda (transcript)
               (define prologue
                 (bytes-append transcript-prefix transcript application-prologue))
-              (new connection% (initiator? initiator?) (protocol protocol)
+              (new connection% (protocol protocol) (initiator? initiator?)
                    (info info) (prologue prologue)))))
+
+    (define/private (check-initialized who)
+      (unless connection (error who "not initialized")))
 
     ;; add to transcript and initialize connection if not already initialized
     (define/private (-do-transcript . bss)
-      (for ([bs (in-list bss)])
-        (write-bytes bs transcript-out))
-      (when (procedure? connection)
-        (set! connection (connection (get-output-bytes transcript-out)))))
+      (when transcript-out
+        (for ([bs (in-list bss)])
+          (write-bytes bs transcript-out))
+        (when (procedure? connection)
+          (set! connection (connection (get-output-bytes transcript-out))))))
 
     ;; --------------------
 
     ;; write-handshake-message : Bytes Bytes [Nat] -> Bytes
     (define/public (write-handshake-message negotiation [plaintext #""] [padded-len 0])
+      (check-initialized 'write-handshake-message)
       (define negotiation-len (length->bytes negotiation))
-      (when transcript (-do-transcript negotiation-len negotiation))
+      (-do-transcript negotiation-len negotiation)
       (define message
         (send connection write-handshake-message
               (cond [(send connection next-payload-encrypted?)
@@ -94,7 +96,7 @@
                                    (crypto-random-bytes (max 0 (- padded-len plaintext-len))))]
                     [else plaintext])))
       (define message-len (length->bytes (bytes-length message)))
-      (when transcript (-do-transcript message-len message))
+      (-do-transcript message-len message)
       (bytes-append negotiation-len
                     negotiation
                     message-len
@@ -103,6 +105,7 @@
     ;; peek-handshake-message : Bytes -> Bytes
     ;; Note: does not write to transcript.
     (define/public (peek-handshake-negotiation msg)
+      (check-initialized 'peek-handshake-message)
       (define msg-in (open-input-bytes msg))
       (define negotiation-len (read-integer 2 #t msg-in))
       (define negotiation (read-bytes* negotiation-len msg-in))
@@ -110,15 +113,16 @@
 
     ;; read-handshake-message : Bytes -> (values Bytes Bytes)
     (define/public (read-handshake-message msg)
+      (check-initialized 'read-handshake-message)
       (define msg-in (open-input-bytes msg))
       (define negotiation-len (read-integer 2 #t msg-in))
       (define negotiation (read-bytes* negotiation-len msg-in))
-      (when transcript (-do-transcript (length->bytes negotiation-len) negotiation))
+      (-do-transcript (length->bytes negotiation-len) negotiation)
       (define message-len (read-integer 2 #t msg-in))
       (define message (read-bytes* message-len msg-in))
       (unless (eof-object? (peek-byte msg-in))
         (error 'read-handshake-message "bytes left over"))
-      (when transcript (-do-transcript (length->bytes message-len) message))
+      (-do-transcript (length->bytes message-len) message)
       (define encrypted? (send connection next-payload-encrypted?))
       (define payload (send connection read-handshake-message message))
       (values negotiation
@@ -130,9 +134,11 @@
 
     ;; write-transport-message : Bytes -> Bytes
     (define/public (write-transport-message payload)
+      (check-initialized 'write-transport-message)
       (send connection write-transport-message payload))
 
     ;; read-transport-message : Bytes -> Bytes
     (define/public (read-transport-message msg)
+      (check-initialized 'read-transport-message)
       (send connection read-transport-message msg))
     ))
