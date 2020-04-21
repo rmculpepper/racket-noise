@@ -71,6 +71,8 @@
             [(retry) #"NoiseSocketInit3"]
             [else (error '|socket-base% initialize| "bad reason: ~e" reason)]))
         (send protocol check-info-keys '|socket-base% initialize| initiator? info)
+        (unless (is-a? connection pre-connection%)
+          (set! connection (new pre-connection%)))
         (send connection update! protocol initiator? info prefix application-prologue)))
 
     (define/public (close)
