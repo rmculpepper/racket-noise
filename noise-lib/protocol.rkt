@@ -471,7 +471,8 @@
 
 (define connection%
   (class* object% (connection<%>)
-    (init protocol initiator? info prologue)
+    (init-field protocol initiator?)
+    (init info prologue)
 
     ;; States:
     ;; - handshake  : hstate is handshake-state%, tstate-* = #f
@@ -486,6 +487,9 @@
     (define sema (make-semaphore 1))
 
     (super-new)
+
+    (define/public (get-protocol) protocol)
+    (define/public (get-initiator?) initiator?)
 
     ;; --------------------
 

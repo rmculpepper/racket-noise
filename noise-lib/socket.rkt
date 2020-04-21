@@ -45,14 +45,15 @@
     (init-field [application-prologue #""])
     (super-new)
 
-    (define transcript-out (open-output-bytes)) ;; #f/BytesOutputPort, mutated
+    ;; transcript-out : #f/BytesOutputPort, mutated
+    (field [transcript-out (open-output-bytes)])
 
     ;; connection : (U #f pre-connection% connection%), mutated
     (field [connection #f])
 
     ;; --------------------
 
-    (define sema (make-semaphore 1))
+    (field [sema (make-semaphore 1)])
 
     (define-syntax-rule (with-lock . body)
       ;; FIXME: kill connection on error?
@@ -74,6 +75,11 @@
               (new pre-connection% (protocol protocol) (initiator? initiator?)
                    (prefix transcript-prefix) (suffix application-prologue)
                    (info info)))))
+
+    (define/public (close)
+      (with-lock
+        (set! connection #f)
+        (set! transcript-out #f)))
 
     (define/public (discard-transcript!)
       (with-lock (set! transcript-out #f)))
@@ -116,22 +122,32 @@
     ;; --------------------
 
     ;; read-handshake-message : -> (values Bytes (U Bytes 'bad))
-    (define/public (read-handshake-message #:allow-bad-noise-message? [allow-bad? #f])
+    (define/public (read-handshake-message #:have-negotiation? [have-negotiation? #f])
       (-check-initialized 'read-handshake-message)
-      (define negotiation (-read-frame))
-      (-do-transcript negotiation)
+      (define negotiation (or have-negotiation? (read-handshake-negotiation)))
       (define noise-message (-read-frame))
       (-do-transcript noise-message)
       (define encrypted? (send connection next-payload-encrypted?))
       (define payload
-        (with-handlers ([auth-decrypt-exn? (lambda (e) (if allow-bad? 'bad (raise e)))])
+        (with-handlers ([auth-decrypt-exn?
+                         (lambda (e) (if have-negotiation? 'bad (raise e)))])
           (send connection read-handshake-message noise-message)))
       (define message
         (cond [(eq? payload 'bad) 'bad]
-              [encrypted?
-               (read-frame-from-bytes 'read-handshake-message payload)]
+              [encrypted? (read-frame-from-bytes 'read-handshake-message payload)]
               [else payload]))
       (values negotiation message))
+
+    (define/public (read-handshake-negotiation)
+      (-read-frame/do-transcript))
+
+    (define/public (read-handshake-payload/no-decrypt)
+      (-read-frame/do-transcript))
+
+    (define/private (-read-frame/do-transcript)
+      (define data (-read-frame))
+      (-do-transcript data)
+      data)
 
     ;; --------------------
 
@@ -192,6 +208,9 @@
       (define prologue (bytes-append prefix transcript suffix))
       (new connection% (protocol protocol) (initiator? initiator?)
            (info info) (prologue prologue)))
+
+    (define/public (get-protocol) protocol)
+    (define/public (get-initiator?) initiator?)
 
     ;; Connection-state methods
     (define/public (in-handshake-phase?) #f)
