@@ -300,7 +300,7 @@ It seems out of place to require responder to support all listed Noise protocols
       (define mpatterns (-get-protocol-mpatterns protocol))
       ;; FIXME: early payload
       (define req-payload (-make-payload config protocol mpatterns #t))
-      (eprintf "A -> ~s ~e ; ~e\n" mode ndreq req-payload)
+      (eprintf "~s A -> : ~e ; ~e\n" mode ndreq req-payload)
       (send socket write-handshake-message
             (message->bytes NoiseLingoNegotiationDataRequest ndreq)
             (message->bytes NoiseLingoHandshakePayload req-payload))
@@ -311,7 +311,7 @@ It seems out of place to require responder to support all listed Noise protocols
     (define/private (-connect-k config protocol mode)
       ;; FIXME: handle silent rejection better
       (define ndresp (-read-handshake-resp))
-      (eprintf "A <- ~s ~e\n" mode ndresp)
+      (eprintf "~s A <- : ~e\n" mode ndresp)
       (cond [(equal? ndresp '#hasheq()) ;; ok
              (define payload (-read-handshake-noise 'decrypt))
              (define mpatterns (-get-protocol-mpatterns protocol))
@@ -349,10 +349,14 @@ It seems out of place to require responder to support all listed Noise protocols
     (define/private (-connect/switch config protocol-name)
       (cond [(find-protocol-by-name protocol-name (hash-ref config 'switch-protocols null))
              => (lambda (protocol)
-                  (send socket initialize 'switch protocol #f (hash-ref config 'keys-info))
+                  (define keys-info (send socket get-keys-info))
+                  ;;(eprintf "c/switch new keys-info = ~e\n" keys-info)
+                  (define config* (hash-set config 'keys-info keys-info))
+                  (eprintf "[init A] is now [switch B]\n")
+                  (send socket initialize 'switch protocol #f keys-info)
                   (define payload (-read-handshake-noise 'decrypt))
                   (define mpatterns (-get-protocol-mpatterns protocol))
-                  (-negotiate-k config mpatterns payload))]
+                  (-negotiate-k config* mpatterns payload))]
             [else
              (-read-handshake-noise 'discard)
              (error 'connect "peer switched to unsupported protocol")]))
@@ -374,7 +378,7 @@ It seems out of place to require responder to support all listed Noise protocols
 
     (define/private (-accept config mode) ;; mode is (U 'init 'switch 'retry)
       (define ndreq (-read-handshake-req))
-      (eprintf "-> B ~s ~e\n" mode ndreq)
+      (eprintf "~s -> B : ~e\n" mode ndreq)
       (define protocol-name (hash-ref ndreq 'initial_protocol))
       (cond [(find-protocol-by-name protocol-name (hash-ref config 'protocols null))
              => (lambda (protocol) (-accept/protocol config protocol mode ndreq))]
@@ -388,7 +392,7 @@ It seems out of place to require responder to support all listed Noise protocols
     (define/private (-accept/protocol config protocol mode ndreq)
       (send socket initialize mode protocol #f (hash-ref config 'keys-info))
       (define payload (-read-handshake-noise 'try-decrypt))
-      (eprintf "-> B ~s ... ; ~e\n" mode payload)
+      (eprintf "~s -> B : ... ; ~e\n" mode payload)
       (cond [(eq? payload 'bad)
              (cond [(eq? mode 'init)
                     (-accept/try-switch-or-retry config ndreq (send protocol get-protocol-name))]
@@ -408,9 +412,20 @@ It seems out of place to require responder to support all listed Noise protocols
              => (lambda (retry-protocol) (-accept/retry config ndreq retry-protocol))]
             [else (-accept/reject config)]))
 
-    (define/private (-accept/switch config ndreq protocol)
-      (define ndreq (config->switch-ndreq config protocol))
-      (-connect config protocol 'switch ndreq))
+    (define/private (-accept/switch config0 ndreq0 protocol)
+      (define keys-info (send socket get-keys-info))
+      ;;(eprintf "a/switch new keys-info = ~e\n" keys-info)
+      (define config (hash-set config0 'keys-info keys-info))
+      (define mpatterns (-get-protocol-mpatterns protocol))
+      (define ndresp (hasheq 'switch_protocol (send protocol get-protocol-name)))
+      (define payload (-make-payload config protocol mpatterns #t)) ;; FIXME??
+      (eprintf "[init B] is now [switch A]\n")
+      (eprintf "~s A -> : ~e ; ~e\n" 'switch ndresp payload)
+      (send socket initialize 'switch protocol #t keys-info)
+      (send socket write-handshake-message
+            (message->bytes NoiseLingoNegotiationDataResponse ndresp)
+            (message->bytes NoiseLingoHandshakePayload payload))
+      (-connect-k config protocol 'switch))
 
     (define/private (-accept/retry config ndreq retry-protocol)
       (define ndresp (hasheq 'retry_protocol (send retry-protocol get-protocol-name)))
