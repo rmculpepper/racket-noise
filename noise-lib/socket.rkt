@@ -48,8 +48,8 @@
     ;; transcript-out : #f/BytesOutputPort, mutated
     (field [transcript-out (open-output-bytes)])
 
-    ;; connection : (U #f pre-connection% connection%), mutated
-    (field [connection #f])
+    ;; connection : (U pre-connection% connection%), mutated
+    (field [connection (new pre-connection%)])
 
     ;; --------------------
 
@@ -64,17 +64,14 @@
     ;; initialize : (U 'init 'switch 'retry) Protocol Boolean InfoHash -> Void
     (define/public (initialize reason protocol initiator? info)
       (with-lock
-        (define transcript-prefix
+        (define prefix
           (case reason
             [(init) #"NoiseSocketInit1"]
             [(switch) #"NoiseSocketInit2"]
             [(retry) #"NoiseSocketInit3"]
             [else (error '|socket-base% initialize| "bad reason: ~e" reason)]))
         (send protocol check-info-keys '|socket-base% initialize| initiator? info)
-        (set! connection
-              (new pre-connection% (protocol protocol) (initiator? initiator?)
-                   (prefix transcript-prefix) (suffix application-prologue)
-                   (info info)))))
+        (send connection update! protocol initiator? info prefix application-prologue)))
 
     (define/public (close)
       (with-lock
@@ -93,9 +90,6 @@
         (when (is-a? connection pre-connection%)
           (set! connection (send connection connect (get-output-bytes transcript-out))))))
 
-    (define/private (-check-initialized who)
-      (unless connection (error who "not initialized")))
-
     ;; --------------------
 
     (abstract -write-frame) ;; Bytes [Boolean] -> Void
@@ -103,73 +97,65 @@
 
     ;; --------------------
 
-    ;; write-handshake-message : Bytes Bytes [Nat] -> Void
-    (define/public (write-handshake-message negotiation [plaintext #""] [padded-len 0])
-      (-check-initialized 'write-handshake-message)
+    ;; write-handshake-message : Bytes Bytes/#f [Nat] -> Void
+    (define/public (write-handshake-message negotiation plaintext [padded-len 0])
       (-do-transcript negotiation)
       (-write-frame negotiation #f)
       (define noise-message
-        (send connection write-handshake-message
-              (cond [(send connection next-payload-encrypted?)
-                     (define plaintext-len (bytes-length plaintext))
+        (cond [(eq? plaintext #f) #""]
+              [(send connection next-payload-encrypted?)
+               (define plaintext-len (bytes-length plaintext))
+               (send connection write-handshake-message
                      (bytes-append (integer->integer-bytes plaintext-len 2 #f #t)
                                    plaintext
-                                   (crypto-random-bytes (max 0 (- padded-len plaintext-len))))]
-                    [else plaintext])))
+                                   (crypto-random-bytes (max 0 (- padded-len plaintext-len)))))]
+              [else (send connection write-handshake-message plaintext)]))
       (-do-transcript noise-message)
       (-write-frame noise-message))
 
     ;; --------------------
 
-    ;; read-handshake-message : -> (values Bytes (U Bytes 'bad))
-    (define/public (read-handshake-message #:have-negotiation? [have-negotiation? #f])
-      (-check-initialized 'read-handshake-message)
-      (define negotiation (or have-negotiation? (read-handshake-negotiation)))
-      (define noise-message (-read-frame))
-      (-do-transcript noise-message)
-      (define encrypted? (send connection next-payload-encrypted?))
-      (define payload
-        (with-handlers ([auth-decrypt-exn?
-                         (lambda (e) (if have-negotiation? 'bad (raise e)))])
-          (send connection read-handshake-message noise-message)))
-      (define message
-        (cond [(eq? payload 'bad) 'bad]
-              [encrypted? (read-frame-from-bytes 'read-handshake-message payload)]
-              [else payload]))
-      (values negotiation message))
+    ;; read-handshake-message : -> (values Bytes Bytes)
+    (define/public (read-handshake-message)
+      (define negotiation (read-handshake-negotiation))
+      (define noise (read-handshake-noise 'decrypt))
+      (values negotiation noise))
 
     (define/public (read-handshake-negotiation)
-      (-read-frame/do-transcript))
+      (let ([nego (-read-frame)]) (-do-transcript nego) nego))
 
-    (define/public (read-handshake-payload/no-decrypt)
-      (-read-frame/do-transcript))
-
-    (define/private (-read-frame/do-transcript)
-      (define data (-read-frame))
-      (-do-transcript data)
-      data)
+    (define/public (read-handshake-noise mode)
+      (define noise-message (-read-frame))
+      (-do-transcript noise-message)
+      (let loop ([mode mode])
+        (case mode
+          [(decrypt)
+           (define encrypted? (send connection next-payload-encrypted?))
+           (define payload (send connection read-handshake-message noise-message))
+           (if encrypted? (read-frame-from-bytes 'read-handshake-message payload) payload)]
+          [(try-decrypt)
+           (with-handlers ([auth-decrypt-exn? (lambda (e) 'bad)])
+             (loop 'decrypt))]
+          [(discard) (void)])))
 
     ;; --------------------
 
     ;; write-transport-message : Bytes -> Void
     (define/public (write-transport-message payload)
-      (-check-initialized 'write-transport-message)
       (-write-frame (send connection write-transport-message payload)))
 
     ;; read-transport-message : -> Bytes
     (define/public (read-transport-message)
-      (-check-initialized 'read-transport-message)
       (send connection read-transport-message (-read-frame)))
 
     ;; ----------------------------------------
     ;; Connection-state methods (forward to connection)
 
-    (define-syntax-rule (forward m a ...) (send (or connection not-connected) m a ...))
-    (define/public (in-handshake-phase?) (forward in-handshake-phase?))
-    (define/public (in-transport-phase?) (forward in-transport-phase?))
-    (define/public (get-handshake-hash) (forward get-handshake-hash))
-    (define/public (can-write-message?) (forward can-write-message?))
-    (define/public (can-read-message?) (forward can-read-message?))
+    (define/public (in-handshake-phase?) (send connection in-handshake-phase?))
+    (define/public (in-transport-phase?) (send connection in-transport-phase?))
+    (define/public (get-handshake-hash) (send connection get-handshake-hash))
+    (define/public (can-write-message?) (send connection can-write-message?))
+    (define/public (can-read-message?) (send connection can-read-message?))
     ))
 
 (define (auth-decrypt-exn? e)
@@ -184,20 +170,46 @@
     (error who "invalid frame"))
   (subbytes bs 2 (+ 2 len)))
 
-(define not-connected%
+;; A pre-connection builds a connection in two stages, while implementing part
+;; of the connection% interface.
+(define pre-connection%
   (class object%
     (super-new)
+
+    (define connector #f)
+    (define initiator? #f)
+
+    (define/public (update! protocol initr? info prefix suffix)
+      (set! initiator? initr?)
+      (set! connector
+            (lambda (transcript)
+              (define prologue (bytes-append prefix transcript suffix))
+              (new connection% (protocol protocol) (initiator? initr?)
+                   (info info) (prologue prologue)))))
+
+    (define/public (connect transcript)
+      (cond [connector (connector transcript)]
+            [else (error 'connect "internal error: missing protocol etc")]))
+
+    ;; Dummy versions of {read,write}-handshake-message before protocol selected
+    (define/public (read-handshake-message data) data)
+    ;; (define/public (next-payload-encrypted?) #f)
+    ;; (define/public (write-handshake-message data)
+    ;;   (cond [(equal? data #"") #""]
+    ;;         [else (error '|pre-connection% write-handshake-message| "internal error")]))
+
     ;; Connection-state methods
-    (define/public (in-handshake-phase?) #f)
+    (define/public (in-handshake-phase?) #t)
     (define/public (in-transport-phase?) #f)
     (define/public (get-handshake-hash)
       (error 'get-handshake-hash "handshake is not finished (not connected)"))
-    (define/public (can-write-message?) (error 'can-write-message? "not connected"))
-    (define/public (can-read-message?) (error 'can-read-messge? "not connected"))
+    (define/public (can-write-message?)
+      (if connector initiator? (error 'can-write-message? "not connected")))
+    (define/public (can-read-message?)
+      (if connector (not initiator?) (error 'can-read-messge? "not connected")))
     ))
 
-(define not-connected (new not-connected%))
-
+#|
 ;; A pre-connection needs transcript (=> prologue) to create connection.
 (define pre-connection%
   (class object%
@@ -209,11 +221,8 @@
       (new connection% (protocol protocol) (initiator? initiator?)
            (info info) (prologue prologue)))
 
-    (define/public (get-protocol) protocol)
-    (define/public (get-initiator?) initiator?)
-
     ;; Connection-state methods
-    (define/public (in-handshake-phase?) #f)
+    (define/public (in-handshake-phase?) #t)
     (define/public (in-transport-phase?) #f)
     (define/public (get-handshake-hash)
       (error 'get-handshake-hash "handshake is not finished"))
@@ -223,6 +232,7 @@
     (define/public (can-write-message?) initiator?)
     (define/public (can-read-message?) (not initiator?))
     ))
+|#
 
 ;; ----------------------------------------
 
