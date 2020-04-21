@@ -300,7 +300,7 @@ It seems out of place to require responder to support all listed Noise protocols
       (define mpatterns (-get-protocol-mpatterns protocol))
       ;; FIXME: early payload
       (define req-payload (-make-payload config protocol mpatterns #t))
-      (eprintf "A -> ~e ; ~e\n" ndreq req-payload)
+      ;;(eprintf "A -> ~e ; ~e\n" ndreq req-payload)
       (send socket write-handshake-message
             (message->bytes NoiseLingoNegotiationDataRequest ndreq)
             (message->bytes NoiseLingoHandshakePayload req-payload))
@@ -311,7 +311,7 @@ It seems out of place to require responder to support all listed Noise protocols
     (define/private (-connect-k config protocol mode)
       ;; FIXME: handle silent rejection better
       (define ndresp (-read-handshake-resp))
-      (eprintf "A <- ~e\n" ndresp)
+      ;;(eprintf "A <- ~e\n" ndresp)
       (cond [(equal? ndresp '#hasheq()) ;; ok
              (define payload (-read-handshake-noise 'decrypt))
              (define mpatterns (-get-protocol-mpatterns protocol))
@@ -374,7 +374,7 @@ It seems out of place to require responder to support all listed Noise protocols
 
     (define/private (-accept config mode) ;; mode is (U 'init 'switch 'retry)
       (define ndreq (-read-handshake-req))
-      (eprintf "-> B ~e\n" ndreq)
+      ;;(eprintf "-> B ~e\n" ndreq)
       (define protocol-name (hash-ref ndreq 'initial_protocol))
       (cond [(find-protocol-by-name protocol-name (hash-ref config 'protocols null))
              => (lambda (protocol) (-accept/protocol config protocol mode ndreq))]
@@ -388,7 +388,7 @@ It seems out of place to require responder to support all listed Noise protocols
     (define/private (-accept/protocol config protocol mode ndreq)
       (send socket initialize mode protocol #f (hash-ref config 'keys-info))
       (define payload (-read-handshake-noise 'try-decrypt))
-      (eprintf "-> B ... ; ~e\n" payload)
+      ;;(eprintf "-> B ... ; ~e\n" payload)
       (cond [(eq? payload 'bad)
              (-accept/try-switch-or-retry config ndreq (send protocol get-protocol-name))]
             [(not (eq? mode 'init))
@@ -435,7 +435,7 @@ It seems out of place to require responder to support all listed Noise protocols
           (send socket write-handshake-message
                 #"" (message->bytes NoiseLingoHandshakePayload payload))
           (loop-recv config (cdr mpatterns))))
-      (define (loop-recv mpatterns)
+      (define (loop-recv config mpatterns)
         (when (pair? mpatterns)
           (define-values (nego-bs payload-bs) (send socket read-handshake-message))
           (unless (equal? nego-bs #"") (error 'connect "unexpected negotiation data"))
