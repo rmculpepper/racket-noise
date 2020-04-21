@@ -243,10 +243,14 @@ It seems out of place to require responder to support all listed Noise protocols
 
 |#
 
-;; A LingoSocketConfig is ...
-(define (lingo-socket-config->negotiation-data-request config)
+;; Config keys:
+;; - keys-info : Info
+;; - s-evidence: ...
+
+(define (config->init-ndreq config)
   (define (protocol->name p) (send p get-protocol-name))
-  (for/fold ([ndreq (hasheq)]) ([(k v) (in-hash config)])
+  (for/fold ([ndreq (config->base-ndreq config)])
+            ([(k v) (in-hash config)])
     (case k
       [(initial-protocol)
        (hash-set ndreq 'initial_protocol (protocol->name v))]
@@ -256,17 +260,21 @@ It seems out of place to require responder to support all listed Noise protocols
        (hash-set ndreq 'retry_protocol (map protocol->name v))]
       [(rejected-protocol)
        (if v (hash-set ndreq 'rejected-protocol (protocol->name v)) ndreq)]
-      ;; ----
+      [else ndreq])))
+
+(define (config->switch-ndreq config switch-protocol)
+  (define (protocol->name p) (send p get-protocol-name))
+  (define ndreq0 (config->base-ndreq config))
+  (hash-set ndreq0 'initial_protocol (protocol->name p)))
+
+(define (config->base-ndreq config)
+  (for/fold ([ndreq (hasheq)]) ([(k v) (in-hash config)])
+    (case k
       [(server-name)
        (if v (hash-set ndreq 'server_name v) ndreq)]
-      [(keys-info)
-       ndreq]
-      [else
-       (error 'lingo-socket-config->negotiation-data-request "bad key: ~e" k)])))
+      [else ndreq])))
 
-;; Config keys:
-;; - keys-info : Info
-;; - s-evidence: ...
+;; ----------------------------------------
 
 (define lingo-socket%
   (class object%
@@ -284,11 +292,12 @@ It seems out of place to require responder to support all listed Noise protocols
           (-connect/protocol config protocol #t))))
 
     (define/public (-connect/protocol config protocol first-time?)
-      (define info (hash-ref config 'keys-info))
-      (define ndreq (lingo-socket-config->negotiation-data-request config))
-      (define initiator? #t)
+      (define ndreq (config->ndreq config))
+      (send socket initialize 'init protocol #t (hash-ref config 'keys-info))
+      (-connect/protocol* config protocol first-time? ndreq))
+
+    (define/public (-connect/protocol* config protocol first-time? ndreq)
       (define mpatterns (handshake-pattern-msgs (send protocol get-pattern)))
-      (send socket initialize 'init protocol #t info)
       ;; FIXME: early payload
       (define req-payload (-make-payload config protocol mpatterns #t))
       (send socket write-handshake-message
@@ -462,22 +471,18 @@ It seems out of place to require responder to support all listed Noise protocols
       (define ndresp-bs (send socket read-handshake-negotiation))
       (define ndreq (bytes->message NoiseLingoNegotiationDataRequest ndreq-bs))
       (define protocol-name (hash-ref ndreq 'initial_protocol))
-      ;; FIXME: avoid quadratic complexity
       (cond [(find-protocol-by-name protocol-name (hash-ref config 'protocols null))
              => (lambda (protocol) (-accept/protocol config first-time? ndreq protocol))]
             [(not first-time?)
-             (void (send socket read-handshake-payload/no-decrypt))
+             (send socket read-handshake-noise 'discard) ;; need for transcript
              (-accept/reject config)]
             [else
-             ;; discard payload (but add to transcript)
-             (void (send socket read-handshake-payload/no-decrypt))
-             ;; try switch or retry
+             (send socket read-handshake-noise 'discard) ;; need for transcript
              (-accept/try-switch-or-retry config ndreq protocol-name)]))
 
     (define/public (-accept/protocol config protocol first-time? ndreq)
       (send socket initialize 'init protocol #f (hash-ref config 'keys-info))
-      (define-values (_n payload-bs)
-        (send socket read-handshake-message #:have-negotiation? #t))
+      (define payload-bs (send socket read-handshake-noise 'try-decrypt))
       (cond [(eq? payload-bs 'bad)
              (-accept/try-switch-or-retry config ndreq (send protocol get-protocol-name))]
             [(not first-time?)
@@ -497,18 +502,21 @@ It seems out of place to require responder to support all listed Noise protocols
              => (lambda (retry-protocol) (-accept/retry config ndreq retry-protocol))]
             [else (-accept/reject config)]))
 
-    (define/public (-accept/switch config ndreq switch-protocol)
-      ...)
+    (define/public (-accept/switch config ndreq protocol)
+      (send socket initialize 'switch protocol #t (hash-ref config 'keys-info))
+      (define ndreq (config->ndreq/switch config protocol))
+      (-connect/protocol* config protocol #f ndreq))
 
     (define/public (-accept/retry config ndreq retry-protocol)
-      (send socket write-handshake-messge ...)
-      ;; AARGH, not connected yet!
-      ;; NEW PLAN:
-      ;; - use not-connected, implement dummy read/write-handshake
-      ;; - also implement in pre-connection
-      ...)
+      (define ndresp (hasheq 'retry_protocol (send retry-protocol get-protocol-name)))
+      (define ndresp-bs (message->bytes NoiseLingoNegotiationDataResponse ndresp))
+      (send socket write-handshake-messge ndresp-bs #f)
+      (-accept config #f))
 
     (define/public (-accept/reject config)
+      (when #t ;; FIXME: option for silent reject?
+        (define bye (message->bytes NoiseLingoNegotiationDataResponse (hasheq 'rejected #t)))
+        (send socket write-handshake-message bye #f))
       (send socket close)
       (error 'accept "failed to accept connection"))
 
