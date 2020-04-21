@@ -20,18 +20,18 @@
 
 (define NoiseLingoNegotiationDataRequest
   (Message
-   [1 server_name 'string]
-   [2 initial_protocol 'string]
-   #:repeated [3 switch_protocol 'string]
-   #:repeated [4 retry_protocol 'string]
-   [5 rejected_protocol 'string]
-   [6 psk_id bytes]))
+   [1 server_name 'bytes]
+   [2 initial_protocol 'bytes]
+   #:repeated [3 switch_protocol 'bytes]
+   #:repeated [4 retry_protocol 'bytes]
+   [5 rejected_protocol 'bytes]
+   [6 psk_id 'bytes]))
 
 (define NoiseLingoNegotiationDataResponse
   (Message
    #:oneof ;; response
-   [[3 switch_protocol 'string]
-    [4 retry_protocol 'string]
+   [[3 switch_protocol 'bytes]
+    [4 retry_protocol 'bytes]
     [5 rejected 'bool]]))
 
 (define NoiseLingoTransportOptions
@@ -300,6 +300,7 @@ It seems out of place to require responder to support all listed Noise protocols
       (define mpatterns (-get-protocol-mpatterns protocol))
       ;; FIXME: early payload
       (define req-payload (-make-payload config protocol mpatterns #t))
+      (eprintf "A -> ~e ; ~e\n" ndreq req-payload)
       (send socket write-handshake-message
             (message->bytes NoiseLingoNegotiationDataRequest ndreq)
             (message->bytes NoiseLingoHandshakePayload req-payload))
@@ -310,6 +311,7 @@ It seems out of place to require responder to support all listed Noise protocols
     (define/private (-connect-k config protocol mode)
       ;; FIXME: handle silent rejection better
       (define ndresp (-read-handshake-resp))
+      (eprintf "A <- ~e\n" ndresp)
       (cond [(equal? ndresp '#hasheq()) ;; ok
              (define payload (-read-handshake-noise 'decrypt))
              (define mpatterns (-get-protocol-mpatterns protocol))
@@ -368,13 +370,14 @@ It seems out of place to require responder to support all listed Noise protocols
     ;; ========================================
 
     (define/public (accept config)
-      (-accept config #t))
+      (-accept config 'init))
 
     (define/private (-accept config mode) ;; mode is (U 'init 'switch 'retry)
       (define ndreq (-read-handshake-req))
+      (eprintf "-> B ~e\n" ndreq)
       (define protocol-name (hash-ref ndreq 'initial_protocol))
       (cond [(find-protocol-by-name protocol-name (hash-ref config 'protocols null))
-             => (lambda (protocol) (-accept/protocol config mode ndreq protocol))]
+             => (lambda (protocol) (-accept/protocol config protocol mode ndreq))]
             [(not (eq? mode 'init))
              (-read-handshake-noise 'discard) ;; need for transcript
              (-accept/reject config)]
@@ -385,6 +388,7 @@ It seems out of place to require responder to support all listed Noise protocols
     (define/private (-accept/protocol config protocol mode ndreq)
       (send socket initialize mode protocol #f (hash-ref config 'keys-info))
       (define payload (-read-handshake-noise 'try-decrypt))
+      (eprintf "-> B ... ; ~e\n" payload)
       (cond [(eq? payload 'bad)
              (-accept/try-switch-or-retry config ndreq (send protocol get-protocol-name))]
             [(not (eq? mode 'init))
@@ -467,7 +471,8 @@ It seems out of place to require responder to support all listed Noise protocols
            (match (hash-ref config 's-evidence #f)
              [(list (? bytes? type) (? bytes? blob))
               (hash-cons! payload-h 'evidence_blob_type type)
-              (hash-cons! payload-h 'evidence_blob blob)])]))
+              (hash-cons! payload-h 'evidence_blob blob)]
+             [_ (void)])]))
       ;; fields based on peer's next message
       (for/fold ([payload #hasheq()]) ([tok (in-list peer-next-tokens)])
         (case tok
