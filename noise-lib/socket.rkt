@@ -162,6 +162,7 @@
     (define/public (get-handshake-hash) (send connection get-handshake-hash))
     (define/public (can-write-message?) (send connection can-write-message?))
     (define/public (can-read-message?) (send connection can-read-message?))
+    (define/public (get-keys-info) (send connection get-keys-info))
     ))
 
 (define (auth-decrypt-exn? e)

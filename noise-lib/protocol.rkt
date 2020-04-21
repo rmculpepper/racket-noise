@@ -334,7 +334,7 @@
 
     ;; --------------------
 
-    (define/public (get-info) info)
+    (define/public (get-keys-info) info)
 
     (define/public (direction rw)
       (get-direction initiator? rw))
@@ -534,6 +534,11 @@
       (with-lock
         (cond [hstate (send hstate next-payload-encrypted?)]
               [else #| transport payloads always encrypted |# #t])))
+
+    (define/public (get-keys-info)
+      (with-lock
+        (cond [hstate (send hstate get-keys-info)]
+              [else '#hasheq()])))
 
     ;; --------------------
 
