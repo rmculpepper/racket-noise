@@ -15,6 +15,11 @@
          read-message
          bytes->message)
 
+;; empty-default? : Boolean
+;; If true, then read-message etc does not automatically include
+;; fields that have their default values.
+(define empty-default? #t)
+
 ;; ============================================================
 
 ;; CType = Type | (t:repeat Type) | (t:wrap CType (X -> Value) (Value -> X))
@@ -205,7 +210,7 @@
 
 (define (read-message mtype in)
   (match-define (t:message cs default) mtype)
-  (read-components cs default in))
+  (read-components cs (if empty-default? '#hasheq() default) in))
 
 (define (read-components cs default in)
   (define (finish h) ;; apply decoder for all wrapped ctypes
