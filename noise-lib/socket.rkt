@@ -87,7 +87,7 @@
         (for ([bs (in-list bss)])
           (write-integer (bytes-length bs) 2 #f transcript-out)
           (write-bytes bs transcript-out))
-        (when (is-a? connection pre-connection%)
+        (when (and (is-a? connection pre-connection%) (send connection ready-to-connect?))
           (set! connection (send connection connect (get-output-bytes transcript-out))))))
 
     ;; --------------------
@@ -186,6 +186,8 @@
               (define prologue (bytes-append prefix transcript suffix))
               (new connection% (protocol protocol) (initiator? initr?)
                    (info info) (prologue prologue)))))
+
+    (define/public (ready-to-connect?) (and connector #t))
 
     (define/public (connect transcript)
       (cond [connector (connector transcript)]
