@@ -85,10 +85,14 @@
     (define/private (-do-transcript . bss)
       (when transcript-out
         (for ([bs (in-list bss)])
-          (write-integer (bytes-length bs) 2 #f transcript-out)
-          (write-bytes bs transcript-out))
-        (when (and (is-a? connection pre-connection%) (send connection ready-to-connect?))
-          (set! connection (send connection connect (get-output-bytes transcript-out))))))
+          (cond [(bytes? bs)
+                 (write-integer (bytes-length bs) 2 #f transcript-out)
+                 (write-bytes bs transcript-out)]
+                [(eq? bs 'try-connect)
+                 (when (and (is-a? connection pre-connection%)
+                            (send connection ready-to-connect?))
+                   (set! connection
+                         (send connection connect (get-output-bytes transcript-out))))]))))
 
     ;; --------------------
 
@@ -99,7 +103,7 @@
 
     ;; write-handshake-message : Bytes Bytes/#f [Nat] -> Void
     (define/public (write-handshake-message negotiation plaintext [padded-len 0])
-      (-do-transcript negotiation)
+      (-do-transcript negotiation 'try-connect)
       (-write-frame negotiation #f)
       (define noise-message
         (cond [(eq? plaintext #f) #""]
@@ -126,7 +130,7 @@
 
     (define/public (read-handshake-noise mode)
       (define noise-message (-read-frame))
-      (-do-transcript noise-message)
+      (-do-transcript 'try-connect noise-message)
       (let loop ([mode mode])
         (case mode
           [(decrypt)
