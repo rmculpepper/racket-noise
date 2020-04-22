@@ -14,6 +14,12 @@
          "private/protocol-name.rkt")
 (provide (all-defined-out))
 
+(provide noise-protocol<%>
+         noise-protocol-state<%>)
+
+(define (noise-protocol? v) (is-a? v protocol<%>))
+(define (noise-protocol-state? v) (is-a? v protocol-state<%>))
+
 ;; Reference: http://www.noiseprotocol.org/noise.html
 ;;   Revision: 34, Date: 2018-07-11
 
@@ -95,8 +101,8 @@
     ;; --------------------
 
     ;; for testing
-    (define/public (new-connection initiator? info #:prologue [prologue #""])
-      (new connection% (protocol this) (initiator? initiator?)
+    (define/public (new-state initiator? info #:prologue [prologue #""])
+      (new protocol-state% (protocol this) (initiator? initiator?)
            (info info) (prologue prologue)))
 
     ;; for testing
@@ -456,10 +462,10 @@
     ))
 
 ;; ----------------------------------------
-;; Connection
+;; Protocol State
 
-(define connection%
-  (class* object% (connection<%>)
+(define protocol-state%
+  (class* object% (protocol-state<%>)
     (init-field protocol initiator?)
     (init info prologue)
 
@@ -483,15 +489,15 @@
     ;; --------------------
 
     (define-syntax-rule (with-lock . body)
-      ;; FIXME: kill connection on error?
+      ;; FIXME: close on error?
       (call-with-semaphore sema (lambda () . body)))
 
     (define/public (in-handshake-phase?) (and hstate #t))
     (define/public (in-transport-phase?) (and (or tstate-w tstate-r) #t))
 
     (define/public (get-handshake-hash)
-      ;; May want to get hhash even if connection is closed, so test hhash
-      ;; rather than eg (in-transport-phase?).
+      ;; May want to get hhash even if closed, so test hhash rather
+      ;; than eg (in-transport-phase?).
       (or hhash (error 'get-handshake-hash "handshake is not finished")))
 
     (define/private (end-of-handshake! hs-end)
@@ -502,7 +508,7 @@
          (set! tstate-r cs-r)
          (set! hstate #f)]))
 
-    (define/private (kill-connection!)
+    (define/private (close)
       (set! tstate-w #f)
       (set! tstate-r #f)
       (set! hstate #f))

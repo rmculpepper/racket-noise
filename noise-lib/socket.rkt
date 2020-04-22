@@ -48,7 +48,7 @@
     ;; transcript-out : #f/BytesOutputPort, mutated
     (field [transcript-out (open-output-bytes)])
 
-    ;; connection : (U pre-connection% connection%), mutated
+    ;; connection : (U pre-connection% protocol-state%), mutated
     (field [connection (new pre-connection%)])
 
     ;; --------------------
@@ -155,7 +155,7 @@
       (send connection read-transport-message (-read-frame)))
 
     ;; ----------------------------------------
-    ;; Connection-state methods (forward to connection)
+    ;; Protocol state methods (forward)
 
     (define/public (in-handshake-phase?) (send connection in-handshake-phase?))
     (define/public (in-transport-phase?) (send connection in-transport-phase?))
@@ -178,7 +178,7 @@
   (subbytes bs 2 (+ 2 len)))
 
 ;; A pre-connection builds a connection in two stages, while implementing part
-;; of the connection% interface.
+;; of the protocol-state% interface.
 (define pre-connection%
   (class object%
     (super-new)
@@ -191,7 +191,7 @@
       (set! connector
             (lambda (transcript)
               (define prologue (bytes-append prefix transcript suffix))
-              (new connection% (protocol protocol) (initiator? initr?)
+              (new protocol-state% (protocol protocol) (initiator? initr?)
                    (info info) (prologue prologue)))))
 
     (define/public (ready-to-connect?) (and connector #t))
@@ -207,7 +207,7 @@
     ;;   (cond [(equal? data #"") #""]
     ;;         [else (error '|pre-connection% write-handshake-message| "internal error")]))
 
-    ;; Connection-state methods
+    ;; Protocol-state methods
     (define/public (in-handshake-phase?) #t)
     (define/public (in-transport-phase?) #f)
     (define/public (get-handshake-hash)

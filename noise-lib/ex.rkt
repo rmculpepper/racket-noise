@@ -25,8 +25,8 @@
 (define alice-info (send p trim-info #t (hasheq 's alice-sk 'rs bob-pub-bytes)))
 (define bob-info   (send p trim-info #f (hasheq 's bob-sk   'rs alice-pub-bytes)))
 
-(define alice (send p new-connection #t alice-info))
-(define bob   (send p new-connection #f bob-info))
+(define alice (send p new-state #t alice-info))
+(define bob   (send p new-state #f bob-info))
 
 (define msg1 (send alice write-handshake-message #"hello"))
 (send bob read-handshake-message msg1)

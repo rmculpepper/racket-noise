@@ -81,7 +81,7 @@
     [read-handshake-message (->m bytes? (values bytes? handshake-end/c))]
     ))
 
-(define noise-protocol-connection<%>
+(define noise-protocol-state<%>
   (interface ()
     [in-handshake-phase? (->m boolean?)]
     [in-transport-phase? (->m boolean?)]
@@ -94,8 +94,8 @@
     [read-transport-message (->m bytes? bytes?)]
     ))
 
-(define connection<%>
-  (interface (noise-protocol-connection<%>)
+(define protocol-state<%>
+  (interface (noise-protocol-state<%>)
     ))
 
 (define noise-protocol<%>
@@ -111,8 +111,8 @@
   (interface ()
     [get-crypto (->m (is-a?/c crypto<%>))]
     [get-pattern (->m handshake-pattern?)]
-    [new-connection
+    [new-state
      (->*m [boolean? info-hash/c]
            [#:prologue bytes?]
-           (is-a?/c connection<%>))]
+           (is-a?/c protocol-state<%>))]
     ))
