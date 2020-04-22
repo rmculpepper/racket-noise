@@ -15,12 +15,17 @@
 
 (define handshake-end/c any/c) ;; FIXME
 
+;; info-hash/c does NOT check the following:
+;; - private-keys are right kind
+;; - right keys are present
+;; FIXME: maybe parameterize over key type, key set?
+
 (define info-hash/c
   (hash/dc [k symbol?]
            [v (k)
               (case k
-                [(s e) (or/c private-key? priv-key-bytes/c)]
-                [(rs re) (or/c pub-key-bytes/c)]
+                [(s e) private-key?]
+                [(rs re) pub-key-bytes/c]
                 [(psk) (or/c bytes? (-> pub-key-bytes/c key-bytes/c))]
                 [else none/c])]
            #:immutable #t))
@@ -89,8 +94,9 @@
     [get-protocol-name (->m bytes?)]
     [get-extensions (->m (listof string?))]
     [using-psk? (->m boolean?)]
-    [new-connection (->m boolean? info-hash/c (is-a?/c connection<%>))]
-    [new-initiator (->m info-hash/c (is-a?/c connection<%>))]
-    [new-responder (->m info-hash/c (is-a?/c connection<%>))]
+    [new-connection
+     (->*m [boolean? info-hash/c]
+           [#:prologue bytes?]
+           (is-a?/c connection<%>))]
     [generate-private-key (->m private-key?)]
     ))

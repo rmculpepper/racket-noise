@@ -95,12 +95,9 @@
     ;; --------------------
 
     ;; for testing
-    (define/public (new-connection initiator? info)
-      (define prologue (hash-ref info 'prologue #""))
+    (define/public (new-connection initiator? info #:prologue [prologue #""])
       (new connection% (protocol this) (initiator? initiator?)
            (info info) (prologue prologue)))
-    (define/public (new-initiator info) (new-connection #t info))
-    (define/public (new-responder info) (new-connection #f info))
 
     ;; for testing
     (define/public (trim-info initiator? info)
@@ -115,10 +112,6 @@
     ;; convenience
     (define/public (generate-private-key)
       (send crypto generate-private-key))
-
-    ;; FIXME: need to check that private-key is right kind (algorithm)
-
-    ;; needed to send s/e to peer; reverse implicit in pk-derive-secret
     (define/public (pk->public-bytes pk)
       (send crypto pk->public-bytes pk))
     ))
