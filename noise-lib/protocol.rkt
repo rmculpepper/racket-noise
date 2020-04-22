@@ -95,17 +95,12 @@
     ;; --------------------
 
     ;; for testing
-    (define/public (new-connection initiator? [info '#hash()] #:s [s #f] #:rs [rs #f])
-      (let* ([s (if (bytes? s) (bytes->private-key s) s)]
-             [info (if s  (hash-set info 's  s)  info)]
-             [info (if rs (hash-set info 'rs rs) info)])
-        (define prologue (hash-ref info 'prologue #""))
-        (new connection% (protocol this) (initiator? initiator?)
-             (info info) (prologue prologue))))
-    (define/public (new-initiator [info #hasheq()] #:s [s #f] #:rs [rs #f])
-      (new-connection #t info #:s s #:rs rs))
-    (define/public (new-responder [info #hasheq()] #:s [s #f] #:rs [rs #f])
-      (new-connection #f info #:s s #:rs rs))
+    (define/public (new-connection initiator? info)
+      (define prologue (hash-ref info 'prologue #""))
+      (new connection% (protocol this) (initiator? initiator?)
+           (info info) (prologue prologue)))
+    (define/public (new-initiator info) (new-connection #t info))
+    (define/public (new-responder info) (new-connection #f info))
 
     ;; for testing
     (define/public (trim-info initiator? info)
@@ -117,14 +112,15 @@
 
     ;; --------------------
 
+    ;; convenience
     (define/public (generate-private-key)
       (send crypto generate-private-key))
+
+    ;; FIXME: need to check that private-key is right kind (algorithm)
+
+    ;; needed to send s/e to peer; reverse implicit in pk-derive-secret
     (define/public (pk->public-bytes pk)
       (send crypto pk->public-bytes pk))
-    (define/public (datum->pk-key datum fmt)
-      (send crypto datum->pk-key datum))
-    (define/public (bytes->private-key datum)
-      (send crypto bytes->private-key datum))
     ))
 
 ;; ----------------------------------------

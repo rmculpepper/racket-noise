@@ -37,8 +37,6 @@
     [generate-private-key (->m private-key?)]
     [dh (->m private-key? pub-key-bytes/c dh-bytes/c)]
     [pk->public-bytes (->m pk-key? pub-key-bytes/c)]
-    [bytes->private-key (->m bytes? private-key?)]
-    [datum->pk-key (->m any/c symbol? pk-key?)]
     ))
 
 (define cipher-state<%>
@@ -91,25 +89,8 @@
     [get-protocol-name (->m bytes?)]
     [get-extensions (->m (listof string?))]
     [using-psk? (->m boolean?)]
-    [new-connection
-     (->*m [boolean?]
-           [info-hash/c
-            #:s (or/c #f private-key? bytes?)
-            #:rs (or/c #f private-key? bytes?)]
-           (is-a?/c connection<%>))]
-    [new-initiator
-     (->*m []
-           [info-hash/c
-            #:s (or/c #f private-key? bytes?)
-            #:rs (or/c #f private-key? bytes?)]
-           (is-a?/c connection<%>))]
-    [new-responder
-     (->*m []
-           [info-hash/c
-            #:s (or/c #f private-key? bytes?)
-            #:rs (or/c #f private-key? bytes?)]
-           (is-a?/c connection<%>))]
+    [new-connection (->m boolean? info-hash/c (is-a?/c connection<%>))]
+    [new-initiator (->m info-hash/c (is-a?/c connection<%>))]
+    [new-responder (->m info-hash/c (is-a?/c connection<%>))]
     [generate-private-key (->m private-key?)]
-    [bytes->private-key (->m bytes? private-key?)]
-    [datum->pk-key (->m any/c symbol? pk-key?)]
     ))

@@ -78,17 +78,4 @@
         [(list 'ecx 'public _curve (? bytes? pub-bytes))
          pub-bytes]
         [_ (error 'pk->public-bytes "failed")]))
-
-    (define/public (bytes->private-key bs)
-      (define datum
-        (match (crypto:pk-parameters->datum pkp 'rkt-params)
-          ['(ecx params x25519)
-           `(ecx private x25519 ,bs)]
-          ['(ecx params x448)
-           `(ecx private x448 ,bs)]
-          [pk (error 'bytes->private-key "unsupported PK algorithm: ~e" pk)]))
-      (crypto:datum->pk-key datum 'rkt-private))
-
-    (define/public (datum->pk-key datum fmt)
-      (crypto:datum->pk-key datum fmt (crypto:get-factory pkp)))
     ))
