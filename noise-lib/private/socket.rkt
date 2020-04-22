@@ -40,71 +40,73 @@
 ;; - payload
 ;; - padding -- random, must be discarded
 
-(define socket-base%
-  (class* object% (socket<%>)
-    (init-field [application-prologue #""])
+(define noise-socket-handshake-state%
+  (class* object% (socket-handshake-state<%>)
+    (init-field io [application-prologue #""])
     (super-new)
 
     ;; transcript-out : #f/BytesOutputPort, mutated
     (field [transcript-out (open-output-bytes)])
 
-    ;; connection : (U pre-connection% protocol-state%), mutated
-    (field [connection (new pre-connection%)])
+    ;; hstate : (U pre-handshake% noise-handshake-state%), mutated
+    (field [hstate (new pre-handshake%)])
 
-    ;; --------------------
-
-    (field [sema (make-semaphore 1)])
-
-    (define-syntax-rule (with-lock . body)
-      ;; FIXME: kill connection on error?
-      (call-with-semaphore sema (lambda () . body)))
+    ;; socket : (U #f noise-socket%), mutated
+    (field [socket #f])
 
     ;; --------------------
 
     ;; initialize : (U 'init 'switch 'retry) Protocol Boolean InfoHash -> Void
     (define/public (initialize reason protocol initiator? info)
-      (with-lock
-        (define prefix
-          (case reason
-            [(init) #"NoiseSocketInit1"]
-            [(switch) #"NoiseSocketInit2"]
-            [(retry) #"NoiseSocketInit3"]
-            [else (error '|socket-base% initialize| "bad reason: ~e" reason)]))
-        (send protocol check-info-keys '|socket-base% initialize| initiator? info)
-        (unless (is-a? connection pre-connection%)
-          (set! connection (new pre-connection%)))
-        (send connection update! protocol initiator? info prefix application-prologue)))
+      (define prefix
+        (case reason
+          [(init) #"NoiseSocketInit1"]
+          [(switch) #"NoiseSocketInit2"]
+          [(retry) #"NoiseSocketInit3"]))
+      (send protocol check-info-keys 'initialize initiator? info)
+      (unless (is-a? hstate pre-handshake%)
+        (set! hstate (new pre-handshake%)))
+      (send hstate update! protocol initiator? info prefix application-prologue))
 
     (define/public (discard-transcript!)
-      (with-lock (set! transcript-out #f)))
+      (set! transcript-out #f))
 
-    ;; add to transcript and complete connection if not already connected
-    (define/private (-do-transcript . bss)
+    ;; add to transcript and begin handshake if not already begun
+    (define/private (-do-transcript . xs)
       (when transcript-out
-        (for ([bs (in-list bss)])
-          (cond [(bytes? bs)
-                 (write-integer (bytes-length bs) 2 #f transcript-out)
-                 (write-bytes bs transcript-out)]
-                [(eq? bs 'try-connect)
-                 (when (and (is-a? connection pre-connection%)
-                            (send connection ready-to-connect?))
-                   (set! connection
-                         (send connection connect (get-output-bytes transcript-out))))]))))
+        (for ([x (in-list xs)])
+          (cond [(bytes? x)
+                 (write-integer (bytes-length x) 2 #f transcript-out)
+                 (write-bytes x transcript-out)]
+                [(eq? x 'try-begin)
+                 (when (and (is-a? hstate pre-handshake%) (send hstate ready?))
+                   (define transcript (get-output-bytes transcript-out))
+                   (set! hstate (send hstate make-handshake transcript)))]))))
 
     ;; --------------------
 
-    (abstract -write-frame) ;; Bytes [Boolean] -> Void
-    (abstract -read-frame)  ;; -> Bytes
+    (define/private (-write-frame buf [flush? #t]) (send io write-frame buf flush?))
+    (define/private (-read-frame) (send io read-frame))
+
+    ;; --------------------
+
+    (define/public (get-socket)
+      (cond [socket socket]
+            [(send hstate get-transport)
+             => (lambda (transport)
+                  (set! socket (new noise-socket% (io io) (transport transport)))
+                  socket)]
+            [else #f]))
 
     ;; --------------------
 
     ;; write-handshake-message : Bytes Bytes/#f -> Void
     (define/public (write-handshake-message negotiation plaintext)
-      (-do-transcript negotiation 'try-connect)
+      (-do-transcript negotiation 'try-begin)
       (-write-frame negotiation #f)
       (define noise-message
         (cond [(eq? plaintext #f) #""]
-              [else (send connection write-handshake-message plaintext)]))
+              [else (send hstate write-handshake-message plaintext)]))
       (-do-transcript noise-message)
       (-write-frame noise-message))
 
@@ -121,40 +123,21 @@
 
     (define/public (read-handshake-noise mode)
       (define noise-message (-read-frame))
-      (-do-transcript 'try-connect noise-message)
+      (-do-transcript 'try-begin noise-message)
       (let loop ([mode mode])
         (case mode
-          [(decrypt) (send connection read-handshake-message noise-message)]
+          [(decrypt) (send hstate read-handshake-message noise-message)]
           [(try-decrypt)
            (with-handlers ([auth-decrypt-exn? (lambda (e) 'bad)])
              (loop 'decrypt))]
           [(discard) 'discarded])))
 
-    ;; --------------------
-
-    ;; write-transport-message : Bytes -> Void
-    (define/public (write-transport-message plaintext [padding 0])
-      (-write-frame
-       (send connection write-transport-message
-             (bytes-append (integer->integer-bytes (bytes-length plaintext) 2 #f #t)
-                           plaintext
-                           (crypto-random-bytes padding)))))
-
-    ;; read-transport-message : -> Bytes
-    (define/public (read-transport-message)
-      (define payload (send connection read-transport-message (-read-frame)))
-      (read-frame-from-bytes 'read-transport-message payload))
-
     ;; ----------------------------------------
     ;; Protocol state methods (forward)
 
-    (define/public (in-handshake-phase?) (send connection in-handshake-phase?))
-    (define/public (in-transport-phase?) (send connection in-transport-phase?))
-    (define/public (can-write-message?) (send connection can-write-message?))
-    (define/public (can-read-message?) (send connection can-read-message?))
-
-    (define/public (get-handshake-hash) (send connection get-handshake-hash))
-    (define/public (get-keys-info) (send connection get-keys-info))
+    (define/public (can-write-message?) (send hstate can-write-message?))
+    (define/public (can-read-message?) (send hstate can-read-message?))
+    (define/public (get-keys-info) (send hstate get-keys-info))
     ))
 
 (define (auth-decrypt-exn? e)
@@ -169,58 +152,82 @@
     (error who "invalid frame"))
   (subbytes bs 2 (+ 2 len)))
 
-;; A pre-connection builds a connection in two stages, while implementing part
-;; of the protocol-state% interface.
-(define pre-connection%
+;; ----------------------------------------
+
+;; A pre-handshake builds a handshake in two stages, while
+;; implementing part of the handshake-state% interface.
+(define pre-handshake%
   (class object%
     (super-new)
 
-    (define connector #f)
+    (define maker #f)
     (define initiator? #f)
 
     (define/public (update! protocol initr? info prefix suffix)
       (set! initiator? initr?)
-      (set! connector
+      (set! maker
             (lambda (transcript)
               (define prologue (bytes-append prefix transcript suffix))
-              (new protocol-state% (protocol protocol) (initiator? initr?)
+              (new noise-handshake-state% (protocol protocol) (initiator? initr?)
                    (info info) (prologue prologue)))))
 
-    (define/public (ready-to-connect?) (and connector #t))
+    (define/public (ready?) (and maker #t))
 
-    (define/public (connect transcript)
-      (cond [connector (connector transcript)]
-            [else (error 'connect "internal error: missing protocol etc")]))
+    (define/public (make-handshake transcript)
+      (cond [maker (maker transcript)]
+            [else (error 'make-handshake "internal error: missing protocol etc")]))
 
     ;; Dummy versions of {read,write}-handshake-message before protocol selected
     (define/public (read-handshake-message data) data)
 
     ;; Protocol-state methods
-    (define/public (in-handshake-phase?) #t)
-    (define/public (in-transport-phase?) #f)
-    (define/public (get-handshake-hash)
-      (error 'get-handshake-hash "handshake is not finished (not connected)"))
+    (define/public (get-transport) #f)
     (define/public (can-write-message?)
-      (if connector initiator? (error 'can-write-message? "not connected")))
+      (if maker initiator? (error 'can-write-message? "not ready")))
     (define/public (can-read-message?)
-      (if connector (not initiator?) (error 'can-read-messge? "not connected")))
+      (if maker (not initiator?) (error 'can-read-messge? "not ready")))
     ))
 
 ;; ----------------------------------------
 
-(define socket%
-  (class socket-base%
+(define io%
+  (class* object% (#;io<%>)
     (init-field in out)
     (field [inr (make-binary-reader in)])
     (super-new)
 
-    (define/override (-write-frame bs [flush? #t])
+    (define/public (write-frame bs [flush? #t])
       (write-integer (bytes-length bs) 2 #f out)
       (write-bytes bs out)
       (when flush? (flush-output out)))
 
-    (define/override (-read-frame)
+    (define/public (read-frame)
       (define len (b-read-integer inr 2 #f))
       (b-read-bytes inr len))
 
+    ))
+
+(define (noise-socket-handshake in out)
+  (define io (new io% (in in) (out out)))
+  (new noise-socket-handshake-state% (io io)))
+
+;; ============================================================
+
+(define noise-socket%
+  (class* object% (socket<%>)
+    (init-field io transport)
+    (super-new)
+
+    ;; write-message : Bytes -> Void
+    (define/public (write-message plaintext [padding 0])
+      (send io write-frame
+            (send transport write-message
+                  (bytes-append (integer->integer-bytes (bytes-length plaintext) 2 #f #t)
+                                plaintext
+                                (crypto-random-bytes padding)))))
+
+    ;; read-message : -> Bytes
+    (define/public (read-message)
+      (define payload (send transport read-message (send io read-frame)))
+      (read-frame-from-bytes 'read-message payload))
     ))

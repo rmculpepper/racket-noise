@@ -89,6 +89,7 @@
 
 (define handshake-state<%>
   (interface (noise-handshake-state<%>)
+    [get-keys-info (->m info-hash/c)]
     ))
 
 (define noise-transport<%>
@@ -123,24 +124,35 @@
            noise-handshake-state?)]
     ))
 
-
-
 ;; --------------------
 
-#|
 ;; Mapping names to Noise specs
 ;; - noise-socket<%> represents a Noise Socket in transport phase
-;; - *-negotiator<%> handles handshake phase
+;; - noise-socket-handshake<%> handles handshake phase
+
+(define (noise-socket? x) (is-a? x socket<%>))
+(define (noise-socket-handshake-state? x) (is-a? x socket-handshake-state<%>))
 
 (define noise-socket<%>
   (interface ()
     [write-message (->*m [bytes?] [exact-nonnegative-integer?] void?)]
-    [read-message (->m bytes?)]))
+    [read-message (->m bytes?)]
+    ))
 
-(define noise-socket-negotiator<%>
+(define socket<%>
+  (interface (noise-socket<%>)
+    ))
+
+(define noise-socket-handshake-state<%>
   (interface ()
     ))
 
+(define socket-handshake-state<%>
+  (interface (noise-socket-handshake-state<%>)
+    [get-socket (->m (or/c #f noise-socket?))]
+    ))
+
+#|
 (define noise-lingo-socket-negotiator<%>
   (interface ()
     connect
@@ -151,11 +163,11 @@
 
 ;; XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 
-(define (noise-socket? x) (is-a? x socket<%>))
 (define (noise-lingo-socket? x) (is-a? x lingo-socket<%>))
 
 (define lingo-config/c hash?) ;; FIXME
 
+#|
 (define noise-socket<%>
   (interface ()
     [in-handshake-phase? (->m boolean?)]
@@ -190,6 +202,7 @@
     [discard-transcript! (->m void?)]
     [get-keys-info (->m info-hash/c)]
     ))
+|#
 
 (define noise-lingo-socket<%>
   (interface ()

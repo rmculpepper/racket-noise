@@ -47,7 +47,7 @@
           (error who "info missing required key\n  key: ~e" key))))
 
     (define/public (new-handshake initiator? info #:prologue [prologue #""])
-      (new handshake-state% (protocol this) (initiator? initiator?)
+      (new noise-handshake-state% (protocol this) (initiator? initiator?)
            (info info) (prologue prologue)))
 
     ;; --------------------
@@ -217,7 +217,7 @@
       (case tok [(s)  's] [(e)  'e] [(rs) 'rs] [(re) 're] [else #f])
       (case tok [(s) 'rs] [(e) 're] [(rs)  's] [(re)  'e] [else #f])))
 
-(define handshake-state%
+(define noise-handshake-state%
   (class* object% (handshake-state<%>)
     (init-field protocol)   ;; protocol%
     (init-field initiator?) ;; Boolean
@@ -239,7 +239,7 @@
     ;; Initialization
 
     (begin
-      (send protocol check-info-keys 'handshake-state% initiator? info)
+      (send protocol check-info-keys 'noise-handshake-state% initiator? info)
       (-mix-hash prologue)
       (let ([pre (handshake-pattern-pre (send protocol get-pattern))])
         (define (process-pre same-side? mp)

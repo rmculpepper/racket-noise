@@ -31,8 +31,8 @@
 (define-values (->b a->) (make-pipe))
 (define-values (->a b->) (make-pipe))
 
-(define alice (new socket% (in ->a) (out a->)))
-(define bob (new socket% (in ->b) (out b->)))
+(define alice (noise-socket-handshake ->a a->))
+(define bob   (noise-socket-handshake ->b b->))
 
 (send alice initialize 'init p #t alice-info)
 (send bob   initialize 'init p #f bob-info)
@@ -45,18 +45,21 @@
 (send bob write-handshake-message #"neg2" #"hello back")
 (send alice read-handshake-message)
 
-(list (send alice in-handshake-phase?)
-      (send bob in-handshake-phase?))
+(list (send alice get-socket)
+      (send bob get-socket))
 
 (let loop ([->? #t])
-  (when (or (send alice in-handshake-phase?) (send bob in-handshake-phase?))
+  (unless (and (send alice get-socket) (send bob get-socket))
     (send (if ->? alice bob) write-handshake-message #"...")
     (send (if ->? bob alice) read-handshake-message)
     (printf "-- did another ~s handshake round\n" (if ->? '-> '<-))
     (loop (not ->?))))
 
-(send alice write-transport-message #"nice talking with you")
-(send bob read-transport-message)
+(define alice-t (send alice get-socket))
+(define bob-t (send bob get-socket))
 
-(send bob write-transport-message #"likewise")
-(send alice read-transport-message)
+(send alice-t write-message #"nice talking with you")
+(send bob-t read-message)
+
+(send bob-t write-message #"likewise")
+(send alice-t read-message)
