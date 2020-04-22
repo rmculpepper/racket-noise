@@ -202,10 +202,6 @@
 
     ;; Dummy versions of {read,write}-handshake-message before protocol selected
     (define/public (read-handshake-message data) data)
-    ;; (define/public (next-payload-encrypted?) #f)
-    ;; (define/public (write-handshake-message data)
-    ;;   (cond [(equal? data #"") #""]
-    ;;         [else (error '|pre-connection% write-handshake-message| "internal error")]))
 
     ;; Protocol-state methods
     (define/public (in-handshake-phase?) #t)
@@ -217,31 +213,6 @@
     (define/public (can-read-message?)
       (if connector (not initiator?) (error 'can-read-messge? "not connected")))
     ))
-
-#|
-;; A pre-connection needs transcript (=> prologue) to create connection.
-(define pre-connection%
-  (class object%
-    (init-field protocol initiator? info prefix suffix)
-    (super-new)
-
-    (define/public (connect transcript)
-      (define prologue (bytes-append prefix transcript suffix))
-      (new connection% (protocol protocol) (initiator? initiator?)
-           (info info) (prologue prologue)))
-
-    ;; Connection-state methods
-    (define/public (in-handshake-phase?) #t)
-    (define/public (in-transport-phase?) #f)
-    (define/public (get-handshake-hash)
-      (error 'get-handshake-hash "handshake is not finished"))
-    ;; The following methods answer from the perspective of the socket, which
-    ;; implicitly calls connect. That is, these answer whose turn it is, not
-    ;; whether connection is initialized. (FIXME: maybe rename methods?)
-    (define/public (can-write-message?) initiator?)
-    (define/public (can-read-message?) (not initiator?))
-    ))
-|#
 
 ;; ----------------------------------------
 
