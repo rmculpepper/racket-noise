@@ -33,9 +33,15 @@
 ;; ----------------------------------------
 ;; Interfaces
 
-;; Some interfaces come in public / internal pairs, eg
+(define (noise-protocol? x) (is-a? x protocol<%>))
+(define (noise-protocol-state? x) (is-a? x protocol-state<%>))
+(define (noise-socket? x) (is-a? x socket<%>))
+(define (noise-lingo-socket? x) (is-a? x lingo-socket<%>))
+
+;; Some interfaces come in public / internal pairs plus predicate, eg
 ;; - noise-protocol<%>  -- public interface
 ;; - protocol<%>        -- internal interface, extends noise-protocol<%>
+;; - noise-protocol?    -- recognizes instances of protocol<%>, NOT noise-protocol<%>
 
 (define crypto<%>
   (interface ()
@@ -87,6 +93,7 @@
     [in-transport-phase? (->m boolean?)]
     [can-write-message? (->m boolean?)]
     [can-read-message? (->m boolean?)]
+    ;; ----
     [get-handshake-hash (->m bytes?)]
     [write-handshake-message (->m bytes? bytes?)]
     [write-transport-message (->m bytes? bytes?)]
@@ -115,4 +122,59 @@
      (->*m [boolean? info-hash/c]
            [#:prologue bytes?]
            (is-a?/c protocol-state<%>))]
+    ))
+
+;; --------------------
+
+(define lingo-config/c hash?) ;; FIXME
+
+(define noise-socket<%>
+  (interface ()
+    [in-handshake-phase? (->m boolean?)]
+    [in-transport-phase? (->m boolean?)]
+    [can-write-message? (->m boolean?)]
+    [can-read-message? (->m boolean?)]
+    ;; ----
+    [get-handshake-hash (->m bytes?)]
+    [write-handshake-message
+     (->m bytes? (or/c bytes? #f) void?)]
+    [read-handshake-message
+     (->m (values bytes? bytes?))]
+    [read-handshake-negotiation
+     (->m bytes?)]
+    [read-handshake-noise
+     (->m (or/c 'decrypt 'try-decrypt 'discard)
+          (or/c bytes? 'bad 'discarded))]
+    [write-transport-message
+     (->*m [bytes?] [exact-nonnegative-integer?] void?)]
+    [read-transport-message
+     (->m bytes?)]
+    ))
+
+(define socket<%>
+  (interface (noise-socket<%>)
+    [initialize
+     (->m (or/c 'init 'retry 'switch)
+          noise-protocol?
+          boolean?
+          info-hash/c
+          void?)]
+    [discard-transcript! (->m void?)]
+    [get-keys-info (->m info-hash/c)]
+    ))
+
+(define noise-lingo-socket<%>
+  (interface ()
+    [can-write-message? (->m boolean?)]
+    [can-read-message? (->m boolean?)]
+    [get-handshake-hash (->m bytes?)]
+    [write-transport-message
+     (->*m [bytes?] [exact-nonnegative-integer?] void?)]
+    [read-transport-message (->m bytes?)]
+    ))
+
+(define lingo-socket<%>
+  (interface (noise-lingo-socket<%>)
+    [connect (->m lingo-config/c void?)]
+    [accept  (->m lingo-config/c void?)]
     ))

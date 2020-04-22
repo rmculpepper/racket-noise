@@ -14,11 +14,10 @@
          "private/protocol-name.rkt")
 (provide (all-defined-out))
 
-(provide noise-protocol<%>
+(provide noise-protocol?
+         noise-protocol<%>
+         noise-protocol-state?
          noise-protocol-state<%>)
-
-(define (noise-protocol? v) (is-a? v protocol<%>))
-(define (noise-protocol-state? v) (is-a? v protocol-state<%>))
 
 ;; Reference: http://www.noiseprotocol.org/noise.html
 ;;   Revision: 34, Date: 2018-07-11

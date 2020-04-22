@@ -15,6 +15,9 @@
          "socket.rkt")
 (provide (all-defined-out))
 
+(provide noise-lingo-socket?
+         noise-lingo-socket<%>)
+
 ;; Reference: https://noisesocket.org/spec/nls/
 ;;   Revision: 1, 2018-03-05
 
@@ -280,7 +283,7 @@ It seems out of place to require responder to support all listed Noise protocols
 ;; ----------------------------------------
 
 (define lingo-socket%
-  (class object%
+  (class* object% (lingo-socket<%>)
     (init in out)
     (super-new)
 
@@ -577,9 +580,9 @@ It seems out of place to require responder to support all listed Noise protocols
     ;; ========================================
     ;; Forwarded methods
 
-    ;; write-transport-message : Bytes -> Void
-    (define/public (write-transport-message payload)
-      (send socket write-transport-message payload))
+    ;; write-transport-message : Bytes [Nat] -> Void
+    (define/public (write-transport-message payload [padding 0])
+      (send socket write-transport-message payload padding))
 
     ;; read-transport-message : -> Bytes
     (define/public (read-transport-message)

@@ -16,6 +16,9 @@
          "protocol.rkt")
 (provide (all-defined-out))
 
+(provide noise-socket?
+         noise-socket<%>)
+
 ;; Reference: https://noisesocket.org/spec/noisesocket/
 ;;   Revision: 2draft, 2018-03-04
 
@@ -41,7 +44,7 @@
 ;; - padding -- random, must be discarded
 
 (define socket-base%
-  (class object%
+  (class* object% (socket<%>)
     (init-field [application-prologue #""])
     (super-new)
 
@@ -74,11 +77,6 @@
         (unless (is-a? connection pre-connection%)
           (set! connection (new pre-connection%)))
         (send connection update! protocol initiator? info prefix application-prologue)))
-
-    (define/public (close)
-      (with-lock
-        (set! connection #f)
-        (set! transcript-out #f)))
 
     (define/public (discard-transcript!)
       (with-lock (set! transcript-out #f)))
@@ -155,9 +153,10 @@
 
     (define/public (in-handshake-phase?) (send connection in-handshake-phase?))
     (define/public (in-transport-phase?) (send connection in-transport-phase?))
-    (define/public (get-handshake-hash) (send connection get-handshake-hash))
     (define/public (can-write-message?) (send connection can-write-message?))
     (define/public (can-read-message?) (send connection can-read-message?))
+
+    (define/public (get-handshake-hash) (send connection get-handshake-hash))
     (define/public (get-keys-info) (send connection get-keys-info))
     ))
 
