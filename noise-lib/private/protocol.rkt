@@ -24,6 +24,7 @@
 
     (define/public (get-crypto) crypto)
     (define/public (get-pattern) pattern)
+    (define/public (get-message-patterns) (handshake-pattern-msgs pattern))
     (define/public (get-protocol-name) protocol-name)
     (define/public (get-extensions) extensions)
 
@@ -45,12 +46,11 @@
         (unless (hash-has-key? info key)
           (error who "info missing required key\n  key: ~e" key))))
 
-    ;; --------------------
-
-    ;; for testing
-    (define/public (new-state initiator? info #:prologue [prologue #""])
-      (new protocol-state% (protocol this) (initiator? initiator?)
+    (define/public (new-handshake initiator? info #:prologue [prologue #""])
+      (new handshake-state% (protocol this) (initiator? initiator?)
            (info info) (prologue prologue)))
+
+    ;; --------------------
 
     ;; for testing
     (define/public (trim-info initiator? info)
@@ -230,7 +230,7 @@
     (define sstate    ;; symmetric-state%
       (new symmetric-state% (crypto crypto)
            (protocol-name (send protocol get-protocol-name))))
-
+    (define transport #f) ;; #f or noise-transport%, mutated
     (define using-psk? (send protocol using-psk?))
 
     (super-new)
@@ -277,6 +277,7 @@
     ;; --------------------
 
     (define/public (get-keys-info) info)
+    (define/public (get-transport) transport)
 
     (define/public (direction rw)
       (get-direction initiator? rw))
@@ -288,48 +289,52 @@
       (and (pair? mpatterns)
            (eq? (message-pattern-dir (car mpatterns)) (direction 'read))))
 
-    (define/public (next-payload-encrypted?)
-      (or (send sstate has-key?)
-          (and (pair? mpatterns)
-               (for/or ([tok (in-list (message-pattern-tokens (car mpatterns)))])
-                 (memq tok '(ee es se ss psk))))))
+    (define/public (remaining-message-patterns) mpatterns)
+    (define/public (next-message-pattern)
+      (and (pair? mpatterns) (car mpatterns)))
+    (define/public (previous-message-pattern)
+      (let loop ([mps (send protocol get-message-patterns)] [result #f])
+        (if (eq? mps mpatterns) result (loop (cdr mps) (car mps)))))
 
     ;; next-message-pattern : Symbol (U 'read 'write) -> MessagePattern
-    (define/private (next-message-pattern who rw)
-      (define dir (direction rw))
-      (match mpatterns
-        [(cons mp _)
-         (unless (eq? (message-pattern-dir mp) dir)
-           (error who "not your turn; pattern is ~e" mp))
-         mp]
-        [_ (error who "internal error, no next message pattern")]))
+    (define/private (get/check-next-message-pattern who rw)
+      (cond [(next-message-pattern)
+             => (lambda (mp)
+                  (unless (eq? (message-pattern-dir mp) (direction rw))
+                    (error who "not your turn; pattern is ~e" mp))
+                  mp)]
+            [else (error who "no next message pattern")]))
 
-    ;; advance-pattern! : -> (U #f HandshakeEnd)
+    ;; advance-pattern! : -> Void
     (define/private (advance-pattern!)
       (set! mpatterns (cdr mpatterns))
-      (cond [(null? mpatterns)
-             (define-values (cs-> cs<-) (send sstate split))
-             (define hh (send sstate get-handshake-hash))
-             (list* hh (if initiator? cs-> cs<-) (if initiator? cs<- cs->))]
-            [else #f]))
+      (when (null? mpatterns)
+        (define-values (cs-> cs<-) (send sstate split))
+        (define hh (send sstate get-handshake-hash))
+        (set! transport
+              (new noise-transport%
+                   (handshake-hash hh)
+                   (cs-w (if initiator? cs-> cs<-))
+                   (cs-r (if initiator? cs<- cs->))))))
 
     ;; --------------------
 
-    ;; write-handshake-message : Bytes -> (values Bytes (U #f HandshakeEnd))
+    ;; write-handshake-message : Bytes -> Bytes
     (define/public (write-handshake-message payload)
       (define who 'write-handshake-message)
-      (define mp (next-message-pattern who 'write))
+      (define mp (get/check-next-message-pattern who 'write))
       (define out (open-output-bytes))
       (-write-message:pattern who mp out)
       (define enc-payload (-encrypt-and-hash payload))
       (write-bytes enc-payload out)
-      (values (get-output-bytes out) (advance-pattern!)))
+      (advance-pattern!)
+      (get-output-bytes out))
 
-    (define/public (-write-message:pattern who mp out)
+    (define/private (-write-message:pattern who mp out)
       (for ([sym (in-list (message-pattern-tokens mp))])
         (-write-message:token who sym out)))
 
-    (define/public (-write-message:token who sym out)
+    (define/private (-write-message:token who sym out)
       (define (do-dh sk pk) (-mix-key (send crypto dh sk pk)))
       (case sym
         [(e)
@@ -354,21 +359,22 @@
 
     ;; --------------------
 
-    ;; read-handshake-message : Bytes -> (values Bytes (U #f HandshakeEnd))
+    ;; read-handshake-message : Bytes -> Bytes
     (define/public (read-handshake-message msg)
       (define who 'read-handshake-message)
-      (define mp (next-message-pattern who 'read))
+      (define mp (get/check-next-message-pattern who 'read))
       (define msg-in (open-input-bytes msg))
       (-read-message:pattern who mp msg-in)
       (define enc-payload (port->bytes msg-in))
       (define payload (-decrypt-and-hash enc-payload))
-      (values payload (advance-pattern!)))
+      (advance-pattern!)
+      payload)
 
-    (define/public (-read-message:pattern who mp msg-in)
+    (define/private (-read-message:pattern who mp msg-in)
       (for ([sym (in-list (message-pattern-tokens mp))])
         (-read-message:token who sym msg-in)))
 
-    (define/public (-read-message:token who sym msg-in)
+    (define/private (-read-message:token who sym msg-in)
       (define (do-dh sk pk) (-mix-key (send crypto dh sk pk)))
       (case sym
         [(e)
@@ -409,133 +415,15 @@
     ))
 
 ;; ----------------------------------------
-;; Protocol State
 
-(define protocol-state%
-  (class* object% (protocol-state<%>)
-    (init-field protocol initiator?)
-    (init info prologue)
-
-    ;; States:
-    ;; - handshake  : hstate is handshake-state%, tstate-* = #f
-    ;; - transport  : hstate = #f, one or both tstate-* is cipher-state%
-    ;; - dead       : hstate = tstate-* = #f
-    (define hstate       ;; #f or handshake-state%, mutated
-      (new handshake-state% (protocol protocol) (initiator? initiator?)
-           (info info) (prologue prologue)))
-    (define tstate-w #f) ;; #f or cipher-state%, mutated
-    (define tstate-r #f) ;; #f or cipher-state%, mutated
-    (define hhash #f)    ;; #f or Bytes, mutated
-    (define sema (make-semaphore 1))
-
+(define noise-transport%
+  (class* object% (transport<%>)
+    (init-field handshake-hash cs-w cs-r)
+    (field [sema (make-semaphore 1)])
     (super-new)
-
-    (define/public (get-protocol) protocol)
-    (define/public (get-initiator?) initiator?)
-
-    ;; --------------------
-
-    (define-syntax-rule (with-lock . body)
-      ;; FIXME: close on error?
-      (call-with-semaphore sema (lambda () . body)))
-
-    (define/public (in-handshake-phase?) (and hstate #t))
-    (define/public (in-transport-phase?) (and (or tstate-w tstate-r) #t))
-
-    (define/public (get-handshake-hash)
-      ;; May want to get hhash even if closed, so test hhash rather
-      ;; than eg (in-transport-phase?).
-      (or hhash (error 'get-handshake-hash "handshake is not finished")))
-
-    (define/private (end-of-handshake! hs-end)
-      (match hs-end
-        [(list* hh cs-w cs-r)
-         (set! hhash (bytes->immutable-bytes hh))
-         (set! tstate-w cs-w)
-         (set! tstate-r cs-r)
-         (set! hstate #f)]))
-
-    (define/private (close)
-      (set! tstate-w #f)
-      (set! tstate-r #f)
-      (set! hstate #f))
-
-    ;; --------------------
-
-    (define/public (can-write-message?)
-      (with-lock
-        (cond [hstate (send hstate can-write-message?)]
-              [else (and tstate-w #t)])))
-
-    (define/public (can-read-message?)
-      (with-lock
-        (cond [hstate (send hstate can-read-message?)]
-              [else (and tstate-r #t)])))
-
-    (define/public (next-payload-encrypted?)
-      (with-lock
-        (cond [hstate (send hstate next-payload-encrypted?)]
-              [else #| transport payloads always encrypted |# #t])))
-
-    (define/public (get-keys-info)
-      (with-lock
-        (cond [hstate (send hstate get-keys-info)]
-              [else '#hasheq()])))
-
-    ;; --------------------
-
-    (define/public (write-handshake-message payload)
-      (with-lock
-        (unless (and hstate (send hstate can-write-message?))
-          (error 'write-handshake-message "cannot write handshake message~a"
-                 (describe-state)))
-        (define-values (msg hs-end)
-          (send hstate write-handshake-message payload))
-        (when hs-end (end-of-handshake! hs-end))
-        msg))
-
-    (define/public (read-handshake-message msg)
-      (with-lock
-        (unless (and hstate (send hstate can-read-message?))
-          (error 'read-handshake-message "cannot read handshake message~a"
-                 (describe-state)))
-        (define-values (payload hs-end)
-          (send hstate read-handshake-message msg))
-        (when hs-end (end-of-handshake! hs-end))
-        payload))
-
-    ;; --------------------
-
-    (define/public (write-transport-message payload)
-      (with-lock
-        (unless tstate-w
-          (error 'write-transport-message "cannot write transport message~a"
-                 (describe-state)))
-        (send tstate-w encrypt-with-ad #"" payload)))
-
-    (define/public (read-transport-message msg)
-      (with-lock
-        (unless tstate-r
-          (error 'read-transport-message "cannot read transport message~a"
-                 (describe-state)))
-        (send tstate-r decrypt-with-ad #"" msg)))
-
-    ;; --------------------
-
-    (define/private (describe-state)
-      (cond [hstate
-             (cond [(send hstate can-write-message?)
-                    ";\n in handshake phase (expecting write)"]
-                   [(send hstate can-read-message?)
-                    ";\n in handshake phase (expecting read)"]
-                   [else
-                    ";\n INTERNAL ERROR: in handshake phase but cannot read or write"])]
-            [(and tstate-w tstate-r)
-             ";\n in transport phase (can read or write)"]
-            [tstate-w
-             ";\n in transport phase (can write, cannot read)"]
-            [tstate-r
-             ";\n in transport phase (can read, cannot write)"]
-            [else
-             ";\n not connected"]))
+    (define/public (get-handshake-hash) handshake-hash)
+    (define/public (write-message payload)
+      (call-with-semaphore sema (lambda () (send cs-w encrypt-with-ad #"" payload))))
+    (define/public (read-message message)
+      (call-with-semaphore sema (lambda () (send cs-r decrypt-with-ad #"" message))))
     ))

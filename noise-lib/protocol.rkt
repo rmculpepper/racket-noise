@@ -5,8 +5,10 @@
          "private/protocol.rkt")
 (provide noise-protocol?
          noise-protocol<%>
-         noise-protocol-state?
-         noise-protocol-state<%>
+         noise-handshake-state?
+         noise-handshake-state<%>
+         noise-transport?
+         noise-transport<%>
          (contract-out
           [noise-protocol
            (->* [string?] [#:factories (listof crypto-factory?)]

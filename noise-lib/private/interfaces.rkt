@@ -34,9 +34,8 @@
 ;; Interfaces
 
 (define (noise-protocol? x) (is-a? x protocol<%>))
-(define (noise-protocol-state? x) (is-a? x protocol-state<%>))
-(define (noise-socket? x) (is-a? x socket<%>))
-(define (noise-lingo-socket? x) (is-a? x lingo-socket<%>))
+(define (noise-handshake-state? x) (is-a? x handshake-state<%>))
+(define (noise-transport? x) (is-a? x transport<%>))
 
 ;; Some interfaces come in public / internal pairs plus predicate, eg
 ;; - noise-protocol<%>  -- public interface
@@ -79,31 +78,31 @@
     [has-key? (->m boolean?)]
     ))
 
-(define handshake-state<%>
+(define noise-handshake-state<%>
   (interface ()
     [can-write-message? (->m boolean?)]
     [can-read-message? (->m boolean?)]
-    [write-handshake-message (->m bytes? (values bytes? handshake-end/c))]
-    [read-handshake-message (->m bytes? (values bytes? handshake-end/c))]
-    ))
-
-(define noise-protocol-state<%>
-  (interface ()
-    [in-handshake-phase? (->m boolean?)]
-    [in-transport-phase? (->m boolean?)]
-    [can-write-message? (->m boolean?)]
-    [can-read-message? (->m boolean?)]
-    ;; ----
-    [get-handshake-hash (->m bytes?)]
     [write-handshake-message (->m bytes? bytes?)]
-    [write-transport-message (->m bytes? bytes?)]
     [read-handshake-message (->m bytes? bytes?)]
-    [read-transport-message (->m bytes? bytes?)]
+    [get-transport (->m (or/c #f noise-transport?))]
     ))
 
-(define protocol-state<%>
-  (interface (noise-protocol-state<%>)
+(define handshake-state<%>
+  (interface (noise-handshake-state<%>)
     ))
+
+(define noise-transport<%>
+  (interface ()
+    [get-handshake-hash (->m bytes?)]
+    [write-message (->m bytes? bytes?)]
+    [read-message (->m bytes? bytes?)]
+    ))
+
+(define transport<%>
+  (interface (noise-transport<%>)
+    ))
+
+;; --------------------
 
 (define noise-protocol<%>
   (interface ()
@@ -118,13 +117,42 @@
   (interface ()
     [get-crypto (->m (is-a?/c crypto<%>))]
     [get-pattern (->m handshake-pattern?)]
-    [new-state
+    [new-handshake
      (->*m [boolean? info-hash/c]
            [#:prologue bytes?]
-           (is-a?/c protocol-state<%>))]
+           noise-handshake-state?)]
     ))
 
+
+
 ;; --------------------
+
+#|
+;; Mapping names to Noise specs
+;; - noise-socket<%> represents a Noise Socket in transport phase
+;; - *-negotiator<%> handles handshake phase
+
+(define noise-socket<%>
+  (interface ()
+    [write-message (->*m [bytes?] [exact-nonnegative-integer?] void?)]
+    [read-message (->m bytes?)]))
+
+(define noise-socket-negotiator<%>
+  (interface ()
+    ))
+
+(define noise-lingo-socket-negotiator<%>
+  (interface ()
+    connect
+    accept
+    ))
+|#
+
+
+;; XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+
+(define (noise-socket? x) (is-a? x socket<%>))
+(define (noise-lingo-socket? x) (is-a? x lingo-socket<%>))
 
 (define lingo-config/c hash?) ;; FIXME
 
