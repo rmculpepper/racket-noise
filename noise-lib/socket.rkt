@@ -103,18 +103,12 @@
 
     ;; --------------------
 
-    ;; write-handshake-message : Bytes Bytes/#f [Nat] -> Void
-    (define/public (write-handshake-message negotiation plaintext [padded-len 0])
+    ;; write-handshake-message : Bytes Bytes/#f -> Void
+    (define/public (write-handshake-message negotiation plaintext)
       (-do-transcript negotiation 'try-connect)
       (-write-frame negotiation #f)
       (define noise-message
         (cond [(eq? plaintext #f) #""]
-              [(send connection next-payload-encrypted?)
-               (define plaintext-len (bytes-length plaintext))
-               (send connection write-handshake-message
-                     (bytes-append (integer->integer-bytes plaintext-len 2 #f #t)
-                                   plaintext
-                                   (crypto-random-bytes (max 0 (- padded-len plaintext-len)))))]
               [else (send connection write-handshake-message plaintext)]))
       (-do-transcript noise-message)
       (-write-frame noise-message))
@@ -135,24 +129,26 @@
       (-do-transcript 'try-connect noise-message)
       (let loop ([mode mode])
         (case mode
-          [(decrypt)
-           (define encrypted? (send connection next-payload-encrypted?))
-           (define payload (send connection read-handshake-message noise-message))
-           (if encrypted? (read-frame-from-bytes 'read-handshake-message payload) payload)]
+          [(decrypt) (send connection read-handshake-message noise-message)]
           [(try-decrypt)
            (with-handlers ([auth-decrypt-exn? (lambda (e) 'bad)])
              (loop 'decrypt))]
-          [(discard) (void)])))
+          [(discard) 'discarded])))
 
     ;; --------------------
 
     ;; write-transport-message : Bytes -> Void
-    (define/public (write-transport-message payload)
-      (-write-frame (send connection write-transport-message payload)))
+    (define/public (write-transport-message plaintext [padding 0])
+      (-write-frame
+       (send connection write-transport-message
+             (bytes-append (integer->integer-bytes (bytes-length plaintext) 2 #f #t)
+                           plaintext
+                           (crypto-random-bytes padding)))))
 
     ;; read-transport-message : -> Bytes
     (define/public (read-transport-message)
-      (send connection read-transport-message (-read-frame)))
+      (define payload (send connection read-transport-message (-read-frame)))
+      (read-frame-from-bytes 'read-transport-message payload))
 
     ;; ----------------------------------------
     ;; Protocol state methods (forward)
