@@ -5,9 +5,7 @@
           racket/list
           racket/runtime-path
           crypto/private/common/catalog
-          (for-label racket/base
-                     racket/contract
-                     racket/random
+          (for-label racket/base racket/contract racket/random racket/class
                      crypto crypto/libcrypto
                      noise/protocol noise/socket noise/lingo))
 
@@ -90,10 +88,63 @@ This example shares some of the same setup as
 @; ------------------------------------------------------------
 @section[#:tag "noise-socket"]{Noise Sockets}
 
+@defmodule[noise/socket]
+
+
+@definterface[noise-socket<%> ()]{
+
+@defmethod[(in-handshake-phase?) boolean?]
+@defmethod[(in-transport-phase?) boolean?]
+@defmethod[(can-write-message?) boolean?]
+@defmethod[(can-read-message?) boolean?]
+
+@defmethod[(get-handshake-hash) bytes?]
+
+@defmethod[(write-handshake-message [negotiation bytes?]
+                                    [noise-payload (or/c bytes? #f)])
+           void?]
+
+@defmethod[(read-handshake-message) (values bytes? bytes)]
+
+@defmethod[(read-handshake-negotiation) bytes?]
+
+@defmethod[(read-handshake-noise [mode (or/c 'decrypt 'try-decrypt 'discard)])
+           (or/c bytes? 'bad 'discarded)]
+
+@defmethod[(write-transport-message [plaintext bytes?]
+                                    [padding exact-nonnegative-integer? 0])
+           void?]
+
+@defmethod[(read-transport-message) bytes?]
+
+}
+
+
 @; ------------------------------------------------------------
 @section[#:tag "nls"]{Noise Lingo Sockets (NLS)}
 
+@defmodule[noise/lingo]
 
 
+@definterface[noise-lingo-socket<%> ()]{
+
+Note that @racket[noise-lingo-socket<%>] does not extend
+@racket[noise-socket<%>], and a Noise Lingo socket is not a Noise
+socket, although it contains one.
+
+@defmethod[(write-transport-message [plaintext bytes?]
+                                    [padding exact-nonnegative-integer? 0])
+           void?]{
+
+}
+
+@defmethod[(read-transport-message) bytes?]{
+
+}
+
+@defmethod[(can-read-message?) boolean?]
+@defmethod[(can-write-message?) boolean?]
+@defmethod[(get-handshake-hash) bytes?]
+}
 
 @(close-eval the-eval)
