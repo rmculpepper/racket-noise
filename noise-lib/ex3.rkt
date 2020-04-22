@@ -1,5 +1,6 @@
 #lang racket/base
 (require racket/class
+         racket/promise
          crypto
          crypto/all
          "protocol.rkt"
@@ -31,9 +32,6 @@
 (define-values (->b a->) (make-pipe))
 (define-values (->a b->) (make-pipe))
 
-(define alice (new lingo-socket% (in ->a) (out a->)))
-(define bob (new lingo-socket% (in ->b) (out b->)))
-
 (define alice-config
   (hasheq 'keys-info alice-info
           'initial-protocol p))
@@ -42,10 +40,9 @@
   (hasheq 'keys-info bob-info
           'protocols (list p)))
 
-(define bob-thread (thread (lambda () (send bob accept bob-config))))
-(send alice connect alice-config)
-
-(void (sync bob-thread))
+(define alice-p (delay/thread (noise-lingo-connect ->a a-> alice-config)))
+(define bob (noise-lingo-accept ->b b-> bob-config))
+(define alice (force alice-p))
 
 ;; ----
 
