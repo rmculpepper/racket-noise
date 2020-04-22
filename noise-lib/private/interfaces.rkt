@@ -30,6 +30,13 @@
                 [else none/c])]
            #:immutable #t))
 
+;; ----------------------------------------
+;; Interfaces
+
+;; Some interfaces come in public / internal pairs, eg
+;; - noise-protocol<%>  -- public interface
+;; - protocol<%>        -- internal interface, extends noise-protocol<%>
+
 (define crypto<%>
   (interface ()
     [get-hashlen (->m exact-positive-integer?)]
@@ -74,7 +81,7 @@
     [read-handshake-message (->m bytes? (values bytes? handshake-end/c))]
     ))
 
-(define connection<%>
+(define noise-protocol-connection<%>
   (interface ()
     [in-handshake-phase? (->m boolean?)]
     [in-transport-phase? (->m boolean?)]
@@ -87,16 +94,25 @@
     [read-transport-message (->m bytes? bytes?)]
     ))
 
+(define connection<%>
+  (interface (noise-protocol-connection<%>)
+    ))
+
+(define noise-protocol<%>
+  (interface ()
+    [get-protocol-name (->m bytes?)]
+    [get-extensions (->m (listof string?))]
+    [using-psk? (->m boolean?)]
+    [generate-private-key (->m private-key?)]
+    [pk->public-bytes (->m pk-key? bytes?)]
+    ))
+
 (define protocol<%>
   (interface ()
     [get-crypto (->m (is-a?/c crypto<%>))]
     [get-pattern (->m handshake-pattern?)]
-    [get-protocol-name (->m bytes?)]
-    [get-extensions (->m (listof string?))]
-    [using-psk? (->m boolean?)]
     [new-connection
      (->*m [boolean? info-hash/c]
            [#:prologue bytes?]
            (is-a?/c connection<%>))]
-    [generate-private-key (->m private-key?)]
     ))
