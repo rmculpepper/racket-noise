@@ -16,6 +16,8 @@
 
 @title[#:tag "socket"]{Noise Sockets}
 
+@defmodule[noise/socket]
+
 @; ------------------------------------------------------------
 @section[#:tag "intro-socket"]{Introduction to Noise Sockets}
 
@@ -83,19 +85,41 @@ This example shares some of the same setup as
 
 
 @; ------------------------------------------------------------
-@section[#:tag "noise-socket"]{Noise Sockets}
+@section[#:tag "socket-transport"]{Noise Sockets}
 
-@defmodule[noise/socket]
+@defproc[(noise-socket? [v any/c]) boolean?]{
 
+Returns @racket[#t] if @racket[v] is a Noise socket in transport
+phase, @racket[#f] otherwise.
+
+See also @racket[noise-socket<%>].
+}
 
 @definterface[noise-socket<%> ()]{
 
-@defmethod[(in-handshake-phase?) boolean?]
-@defmethod[(in-transport-phase?) boolean?]
+@defmethod[(get-handshake-hash) bytes?]
+@defmethod[(write-transport-message [plaintext bytes?]
+                                    [padding exact-nonnegative-integer? 0])
+           void?]
+@defmethod[(read-transport-message) bytes?]
+
+}
+
+@; ------------------------------------------------------------
+@section[#:tag "socket-handshake"]{Noise Socket Handshakes}
+
+@defproc[(noise-socket-handshake-state? [v any/c]) boolean?]{
+
+Returns @racket[#t] if @racket[v] is a Noise socket handshake state,
+@racket[#f] otherwise.
+
+See also @racket[noise-socket-handshake-state<%>].
+}
+
+@definterface[noise-socket-handshake-state<%> ()]{
+
 @defmethod[(can-write-message?) boolean?]
 @defmethod[(can-read-message?) boolean?]
-
-@defmethod[(get-handshake-hash) bytes?]
 
 @defmethod[(write-handshake-message [negotiation bytes?]
                                     [noise-payload (or/c bytes? #f)])
@@ -108,11 +132,7 @@ This example shares some of the same setup as
 @defmethod[(read-handshake-noise [mode (or/c 'decrypt 'try-decrypt 'discard)])
            (or/c bytes? 'bad 'discarded)]
 
-@defmethod[(write-transport-message [plaintext bytes?]
-                                    [padding exact-nonnegative-integer? 0])
-           void?]
-
-@defmethod[(read-transport-message) bytes?]
+@defmethod[(get-socket) (or/c #f noise-socket?)]
 
 }
 
@@ -122,26 +142,15 @@ This example shares some of the same setup as
 
 @defmodule[noise/lingo]
 
-
-@definterface[noise-lingo-socket<%> ()]{
-
-Note that @racket[noise-lingo-socket<%>] does not extend
-@racket[noise-socket<%>], and a Noise Lingo socket is not a Noise
-socket, although it contains one.
-
-@defmethod[(write-transport-message [plaintext bytes?]
-                                    [padding exact-nonnegative-integer? 0])
-           void?]{
+@defproc[(noise-lingo-connect [in input-port?] [out output-port?] [config hash?])
+         noise-socket?]{
 
 }
 
-@defmethod[(read-transport-message) bytes?]{
+@defproc[(noise-lingo-accept [in input-port?] [out output-port?] [config hash?])
+         noise-socket?]{
 
 }
 
-@defmethod[(can-read-message?) boolean?]
-@defmethod[(can-write-message?) boolean?]
-@defmethod[(get-handshake-hash) bytes?]
-}
 
 @(close-eval the-eval)
