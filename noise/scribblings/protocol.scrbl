@@ -131,10 +131,10 @@ of a private key) into bytes in the same format used by the Noise
 protocol. The result is suitable for use in a keys-info hash.
 }
 
-@defmethod[(new-state [initiator? boolean?]
-                      [keys-info hash?]
-                      [#:prologue prologue bytes? #""])
-           noise-protocol-state?]{
+@defmethod[(new-handshake [initiator? boolean?]
+                          [keys-info hash?]
+                          [#:prologue prologue bytes? #""])
+           noise-handshake-state?]{
 
 Creates a new Noise protocol state, representing one party in an
 execution of a Noise protocol. If @racket[initiator?] is true, then
@@ -149,68 +149,39 @@ protocol execution fails if the two parties have different prologues.
 
 
 @; ------------------------------------------------------------
-@section[#:tag "protocol-states"]{Protocol States}
+@section[#:tag "handshake"]{Protocol Handshake Phase}
 
-@defproc[(noise-protocol-state? [v any/c]) boolean?]{
+@defproc[(noise-handshake-state? [v any/c]) boolean?]{
 
-Returns @racket[#t] if @racket[v] is a Noise protocol state created by
-the @method[noise-protocol<%> new-state] method, @racket[#f]
+Returns @racket[#t] if @racket[v] is a Noise handshake state created
+by the @method[noise-protocol<%> new-handshake] method, @racket[#f]
 otherwise.
 
-A protocol state represents the state of one party in an execution of
-a Noise protocol.
+A Noise handshake state value represents the state of one party in an
+execution of a Noise protocol handshake.
 
-See also @racket[noise-protocol-state<%>].
+See also @racket[noise-handshake-state<%>].
 }
 
-@definterface[noise-protocol-state<%> ()]{
+@definterface[noise-handshake-state<%> ()]{
 
-Public interface for Noise protocol state objects.
+Public interface for Noise handshake state objects.
 
-Note that @racket[(noise-protocol-state? _v)] implies @racket[(is-a?
-_v noise-protocol-state<%>)], but not vice versa. That is, a Noise
-protocol state object implements additional internal interfaces not
+Note that @racket[(noise-handshake-state? _v)] implies @racket[(is-a?
+_v noise-handshake-state<%>)], but not vice versa. That is, a Noise
+handshake state object implements additional internal interfaces not
 exposed to users.
-
-@defmethod[(in-handshake-phase?) boolean?]{
-
-Returns @racket[#t] if the current protocol execution is in the
-handshake phase; otherwise, returns @racket[#f].
-}
-
-@defmethod[(in-transport-phase?) boolean?]{
-
-Returns @racket[#t] if the current protocol execution is in the
-transport phase; otherwise, returns @racket[#f].
-}
 
 @defmethod[(can-read-message?) boolean?]{
 
-Returns @racket[#t] if the party is able to read or write a message;
+Returns @racket[#t] if the party is able to read a handshake message;
 otherwise, returns @racket[#f].
-
-Note that for interactive (not one-way) protocols, during the
-handshake phase handshake messages are allowed in strictly alternating
-order, but during the transport phase, both parties can both read and
-write messages freely.
 }
 
 @defmethod[(can-write-message?) boolean?]{
 
-Returns @racket[#t] if the party is able write a message; otherwise,
-returns @racket[#f].
-
-Note that for interactive (not one-way) protocols, during the
-handshake phase handshake messages are allowed in strictly alternating
-order, but during the transport phase, both parties can both read and
-write messages freely.
-}
-
-@defmethod[(get-handshake-hash) bytes?]{
-
-Returns a cryptographic digest of the entire handshake. If this method
-is called before the handshake phase is finished, an exception is
-raised.
+Returns @racket[#t] if the party is able write a handshake message;
+otherwise, returns @racket[#f].
 }
 
 @defmethod[(write-handshake-message [payload bytes?]) bytes?]{
@@ -223,8 +194,7 @@ communication.
 Note: whether the @racket[payload] is encrypted or plaintext depends
 on the protocol and the stage of the handshake process.
 
-If the protocol execution is not currently in the handshake phase, or
-if it is not this party's turn to write, an exception is raised.
+If it is not this party's turn to write, an exception is raised.
 }
 
 @defmethod[(read-handshake-message [message bytes?]) bytes?]{
@@ -235,11 +205,44 @@ returns the payload extracted from @racket[message].
 Note: whether the @racket[payload] was encrypted or plaintext depends
 on the protocol and the stage of the handshake process.
 
-If the protocol execution is not currently in the handshake phase, or
-if it is not this party's turn to read, an exception is raised.
+If it is not this party's turn to read, an exception is raised.
 }
 
-@defmethod[(write-transport-message [plaintext bytes?]) bytes?]{
+@defmethod[(get-transport) (or/c #f noise-transport?)]{
+
+If the handshake is finished, returns a Noise transport object. If the
+handshake is not finished, returns @racket[#f].
+}
+
+}
+
+
+@; ------------------------------------------------------------
+@section[#:tag "transport"]{Protocol Transport Phase}
+
+@defproc[(noise-transport? [v any/c]) boolean?]{
+
+Returns @racket[#t] if @racket[v] is a Noise transport returned by
+@method[noise-handshake-state<%> get-transport], @racket[#f]
+otherwise.
+
+See also @racket[noise-transport<%>].
+}
+
+@definterface[noise-transport<%> ()]{
+
+Public interface for Noise transport objects.
+
+Note that @racket[(noise-transport? _v)] implies @racket[(is-a? _v
+noise-transport<%>)], but not vice versa. That is, a Noise transport
+object implements additional internal interfaces not exposed to users.
+
+@defmethod[(get-handshake-hash) bytes?]{
+
+Returns a cryptographic digest of the handshake.
+}
+
+@defmethod[(write-message [plaintext bytes?]) bytes?]{
 
 Encrypts a transport message.
 
@@ -247,12 +250,9 @@ Note that each party has independent messages counters for reading and
 writing. Messages written by one party must be read by the other party
 in the same order; but reading does not affect the write counter, and
 vice versa.
-
-If the protocol execution is not currently in the transport phase, an
-exception is raised.
 }
 
-@defmethod[(read-transport-message [ciphertext bytes?]) bytes?]{
+@defmethod[(read-message [ciphertext bytes?]) bytes?]{
 
 Decrypts a transport message.
 
@@ -261,8 +261,7 @@ writing. Messages written by one party must be read by the other party
 in the same order; but reading does not affect the write counter, and
 vice versa.
 
-If the protocol execution is not currently in the transport phase, an
-exception is raised. If decryption fails, an exception is raised.
+If decryption fails, an exception is raised.
 }
 
 }
