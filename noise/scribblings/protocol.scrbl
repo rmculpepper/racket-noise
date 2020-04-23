@@ -39,23 +39,24 @@
 ]
 
 @examples[#:eval the-eval #:label #f
-(define alice
-  (send ik-proto new-state #t (hasheq 's alice-sk 'rs bob-pub)))
-(define bob
-  (send ik-proto new-state #f (hasheq 's bob-sk)))
+(define alice-hs
+  (send ik-proto new-handshake #t (hasheq 's alice-sk 'rs bob-pub)))
+(define bob-hs
+  (send ik-proto new-handshake #f (hasheq 's bob-sk)))
 ]
 
 @examples[#:eval the-eval #:label #f
-(define msg1 (send alice write-handshake-message #"hello"))
-(send bob read-handshake-message msg1)
-(define msg2 (send bob write-handshake-message #"hello back"))
-(send alice read-handshake-message msg2)
-(list (send alice in-handshake-phase?)
-      (send bob in-handshake-phase?))
-(list (send alice in-transport-phase?)
-      (send bob in-transport-phase?))
-(define msg3 (send alice write-transport-message #"nice talking with you"))
-(send bob read-transport-message msg3)
+(define msg1 (send alice-hs write-handshake-message #"hello"))
+(send bob-hs read-handshake-message msg1)
+(define msg2 (send bob-hs write-handshake-message #"hello back"))
+(send alice-hs read-handshake-message msg2)
+]
+
+@examples[#:eval the-eval #:label #f
+(define alice-t (send alice-hs get-transport))
+(define bob-t (send bob-hs get-transport))
+(define msg3 (send alice-t write-message #"nice talking with you"))
+(send bob-t read-message msg3)
 ]
 
 

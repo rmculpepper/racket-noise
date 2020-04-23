@@ -57,27 +57,24 @@ This example shares some of the same setup as
 (define-values (a-in b-out) (make-pipe))
 (define-values (b-in a-out) (make-pipe))
 
-(define alice (new lingo-socket% (in a-in) (out a-out)))
-(define bob (new lingo-socket% (in b-in) (out b-out)))
-
-(define bob-thread (thread (lambda () (send bob accept bob-config))))
-(send alice connect alice-config)
-(void (sync bob-thread))
+(require racket/promise)
+(define alice-p (delay/thread (noise-lingo-connect a-in a-out alice-config)))
+(define bob (noise-lingo-accept b-in b-out bob-config))
+(define alice (force alice-p))
 ]
 
-
 @examples[#:eval the-eval #:label #f
-(send alice write-transport-message #"hello")
-(send bob read-transport-message)
+(send alice write-message #"hello")
+(send bob read-message)
 
-(send bob write-transport-message #"hello back")
-(send alice read-transport-message)
+(send bob write-message #"hello back")
+(send alice read-message)
 
-(send alice write-transport-message #"nice talking with you")
-(send bob read-transport-message)
+(send alice write-message #"nice talking with you")
+(send bob read-message)
 
-(send bob write-transport-message #"likewise")
-(send alice read-transport-message)
+(send bob write-message #"likewise")
+(send alice read-message)
 ]
 
 
