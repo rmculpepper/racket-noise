@@ -15,13 +15,30 @@
 
 @defmodule[noise/protocol]
 
+The @racketmodname[noise/protocol] library provides an implementation
+of the @hyperlink["https://noiseprotocol.org/"]{Noise Protocol
+Framework}.
+
+Specifically, this library implements revision 34 (2018-07-11)
+@cite{Noise}, including the @tt{psk} and @tt{fallback} extensions.
+
+
 @; ------------------------------------------------------------
 @section[#:tag "intro-protocol"]{Introduction to Noise Protocols}
+
+First we require the necessary libraries and initialize
+@racket[crypto-factories]. (Note that OpenSSL 1.1.1 or later is
+required for the algorithms used below.)
 
 @examples[#:eval the-eval #:label #f
 (require racket/class noise/protocol crypto crypto/libcrypto)
 (crypto-factories (list libcrypto-factory))
 ]
+
+We get a protocol object by calling @racket[noise-protocol] with the
+name of the protocol. A protocol name contains a handshake pattern
+(eg, @tt{IK}), optional extensions, and cryptographic algorithm
+names. Here are two example protocols:
 
 @examples[#:eval the-eval #:label #f
 (define ik-proto
@@ -30,13 +47,38 @@
   (noise-protocol "Noise_XXfallback_25519_ChaChaPoly_SHA512"))
 ]
 
+The rest of this example uses @racket[ik-proto]. The @tt{IK} handshake
+pattern has the following structure:
+
+@verbatim{
+IK:
+    <- s
+    ...
+    -> e, es, s, ss
+    <- e, ee, se
+}
+
+See @cite{Noise} for the interpretation of handshake patterns. The
+important information for this example is the first line, a
+pre-message, which says that the initiator must know the responder's
+static public key.
+
+Let's call the initiator Alice and the responder Bob. We create
+private keys for Alice and Bob, and we also extract Bob's public key
+as a byte string.
+
 @examples[#:eval the-eval #:label #f
 (define alice-sk (send ik-proto generate-private-key))
-(define alice-pub (send ik-proto pk->public-bytes alice-sk))
 
 (define bob-sk (send ik-proto generate-private-key))
 (define bob-pub (send ik-proto pk->public-bytes bob-sk))
 ]
+
+We create new handshake state objects for Alice and Bob. Alice is the
+initiator (@racket[#t]) and Bob is the responder (@racket[#f]). Alice
+knows her own static private key (@racket['s] has @racket[alice-sk])
+and Bob's public key (@racket['rs] has @racket[bob-pub]); Bob only
+knows his own static private key (@racket['s] has @racket[bob-sk]).
 
 @examples[#:eval the-eval #:label #f
 (define alice-hs
@@ -45,19 +87,56 @@
   (send ik-proto new-handshake #f (hasheq 's bob-sk)))
 ]
 
+An @tt{IK} handshake consists of two messages.
+
+Alice sends the first handshake message to Bob, which consists of the
+handshake elements @tt{e, s, es, s, ss} and the payload
+@racket["hello"]. Note that the handshake state object do not do
+communication. The result of ``writing'' the first message is a byte
+string, @racket[msg1]. Bob ``reads'' @racket[msg1], parses and
+interprets the handshake elements, and returns the payload.
+
 @examples[#:eval the-eval #:label #f
 (define msg1 (send alice-hs write-handshake-message #"hello"))
 (send bob-hs read-handshake-message msg1)
+]
+
+Bob sends the second handshake message:
+
+@examples[#:eval the-eval #:label #f
 (define msg2 (send bob-hs write-handshake-message #"hello back"))
 (send alice-hs read-handshake-message msg2)
 ]
 
+The @tt{IK} handshake pattern consists of only two message, so the
+handshake is complete, and the secure transport channel is
+established. Alice and Bob can retrieve the transport channel objects
+using @method[noise-handshake-state<%> get-transport]:
+
 @examples[#:eval the-eval #:label #f
 (define alice-t (send alice-hs get-transport))
 (define bob-t (send bob-hs get-transport))
+]
+
+Now Alice and Bob can freely exchange messages. More precisely, Alice
+must read Bob's messages in the order that Bob writes them, and Bob
+must read Alice's messages in the order that Alice writes them. But
+the two sequences of messages are independent; for example, Bob is
+always free to either read a message, if one is available, or write a
+message, and it makes no difference to the protocol (unless of course,
+Bob's message depends on the content of Alice's).
+
+@examples[#:eval the-eval #:label #f
 (define msg3 (send alice-t write-message #"nice talking with you"))
+(code:comment "Bob chooses to write a message before reading Alice's")
+(define msg4 (send bob-t write-message #"same time next week?"))
+(send alice-t read-message msg4)
 (send bob-t read-message msg3)
 ]
+
+Noise protocol conversations are never finished, only abandoned. (That
+is, higher-level protocols may define a notion of termination, but
+Noise does not.)
 
 
 @; ------------------------------------------------------------
@@ -172,16 +251,16 @@ _v noise-handshake-state<%>)], but not vice versa. That is, a Noise
 handshake state object implements additional internal interfaces not
 exposed to users.
 
-@defmethod[(can-read-message?) boolean?]{
-
-Returns @racket[#t] if the party is able to read a handshake message;
-otherwise, returns @racket[#f].
-}
-
 @defmethod[(can-write-message?) boolean?]{
 
-Returns @racket[#t] if the party is able write a handshake message;
-otherwise, returns @racket[#f].
+Returns @racket[#t] if it is this party's turn to write a handshake
+message; otherwise, returns @racket[#f].
+}
+
+@defmethod[(can-read-message?) boolean?]{
+
+Returns @racket[#t] if it is this party's turn to read a handshake
+message; otherwise, returns @racket[#f].
 }
 
 @defmethod[(write-handshake-message [payload bytes?]) bytes?]{
@@ -222,8 +301,8 @@ handshake is not finished, returns @racket[#f].
 
 @defproc[(noise-transport? [v any/c]) boolean?]{
 
-Returns @racket[#t] if @racket[v] is a Noise transport returned by
-@method[noise-handshake-state<%> get-transport], @racket[#f]
+Returns @racket[#t] if @racket[v] is a Noise transport object returned
+by @method[noise-handshake-state<%> get-transport], @racket[#f]
 otherwise.
 
 See also @racket[noise-transport<%>].
@@ -271,5 +350,20 @@ If decryption fails, an exception is raised.
 @section[#:tag "keys-info"]{Keys Info}
 
 
+
+
+@; ------------------------------------------------------------
+
+@bibliography[
+#:tag "protocol-bibliography"
+
+@bib-entry[#:key "Noise"
+           #:title "The Noise Protocol Framework"
+           #:author "Trevor Perrin"
+           #:url "https://noiseprotocol.org/noise.html"
+           #:date "2018-07-11"
+           #:note " (revision 34, official/unstable)"]
+
+]
 
 @(close-eval the-eval)
