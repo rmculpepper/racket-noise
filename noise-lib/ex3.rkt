@@ -46,14 +46,14 @@
 
 ;; ----
 
-(send alice write-transport-message #"hello")
-(send bob read-transport-message)
+(send alice write-message #"hello")
+(send bob read-message)
 
-(send bob write-transport-message #"hello back")
-(send alice read-transport-message)
+(send bob write-message #"hello back")
+(send alice read-message)
 
-(send alice write-transport-message #"nice talking with you")
-(send bob read-transport-message)
+(send alice write-message #"nice talking with you")
+(send bob read-message)
 
-(send bob write-transport-message #"likewise")
-(send alice read-transport-message)
+(send bob write-message #"likewise")
+(send alice read-message)

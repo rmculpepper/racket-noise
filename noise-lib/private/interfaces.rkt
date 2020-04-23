@@ -152,13 +152,11 @@
     [get-socket (->m (or/c #f noise-socket?))]
     ))
 
-#|
-(define noise-lingo-socket-negotiator<%>
+(define lingo-handshake-state<%>
   (interface ()
     connect
     accept
     ))
-|#
 
 
 ;; XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
