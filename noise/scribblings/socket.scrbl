@@ -7,17 +7,24 @@
           crypto/private/common/catalog
           (for-label racket/base racket/contract racket/random racket/class
                      crypto crypto/libcrypto
-                     noise/protocol noise/socket noise/lingo))
+                     noise/protocol noise/socket))
 
 @(define-runtime-path log-file "eval-logs/socket.rktd")
 @(define the-eval (make-log-based-eval log-file 'record))
-@(the-eval '(require crypto crypto/libcrypto noise/protocol noise/socket noise/lingo))
+@(the-eval '(require crypto crypto/libcrypto noise/protocol noise/socket))
 @(the-eval '(crypto-factories (list libcrypto-factory)))
 
 @title[#:tag "socket"]{Noise Sockets}
 
-This section covers NoiseSocket @cite{NoiseSocket} and its
-instantiation NoiseLingoSocket @cite{NLS}.
+@defmodule[noise/socket]
+
+This library implements NoiseLingoSocket @cite{NLS}, a combination of
+NoiseSocket @cite{NoiseSocket} and the NoiseLingo negotiation
+language.
+
+Specifically, this library implements NoiseSocket revision 2draft
+(2018-03-04) @cite{NoiseSocket} and NLS version 2 (2018-03-18)
+@cite{NLS-rev2}.
 
 
 @; ------------------------------------------------------------
@@ -39,10 +46,10 @@ This example shares some of the same setup as
 (define bob-sk (send ik-proto generate-private-key))
 ]
 
-We also require the implementations of NoiseSocket and NLS:
+We also require the Noise socket implementation:
 
 @examples[#:eval the-eval #:label #f
-(require noise/socket noise/lingo)
+(require noise/socket)
 ]
 
 In order to potentially exercise both Noise protocols defined above,
@@ -69,7 +76,7 @@ fails.
 @examples[#:eval the-eval #:label #f
 (define alice-config
   (hasheq 'keys-info (hasheq 's alice-sk 'rs bob-pub)
-          'initial-protocol ik-proto
+          'protocols (list ik-proto)
           'switch-protocols (list xx-fallback-proto)))
 (define bob-config
   (hasheq 'keys-info (hasheq 's bob-sk)
@@ -85,20 +92,20 @@ We set up IO ports for communication between Alice and Bob:
 ]
 
 Using the IO ports created above, we attempt to create sockets for
-Alice and Bob. Alice connects and Bob accepts. Note that both
-@racket[noise-lingo-connect] and @racket[noise-lingo-accept] are
-blocking operations, so one of them must be done in a separate thread.
+Alice and Bob. Alice connects and Bob accepts. Note that
+@racket[noise-lingo-socket] is a blocking operation, so one of them
+must be done in a separate thread.
 
 @examples[#:eval the-eval #:label #f
 (require racket/promise)
-(define alice-p (delay/thread (noise-lingo-connect a-in a-out alice-config)))
-(define bob (noise-lingo-accept b-in b-out bob-config))
+(define alice-p (delay/thread (noise-lingo-socket 'connect a-in a-out alice-config)))
+(define bob (noise-lingo-socket 'accept b-in b-out bob-config))
 (define alice (force alice-p))
 ]
 
-The @racket[noise-lingo-connect] and @racket[noise-lingo-accept]
-operations handle the handshake phase automatically, so once they
-return Alice and Bob can exchange messages freely.
+The @racket[noise-lingo-socket] operation handles the handshake phase
+automatically, so once the sockets are created Alice and Bob can
+exchange messages freely.
 
 @examples[#:eval the-eval #:label #f
 (send alice write-message #"hello")
@@ -118,18 +125,7 @@ return Alice and Bob can exchange messages freely.
 
 
 @; ------------------------------------------------------------
-@section[#:tag "sockets"]{Noise Sockets}
-
-@defmodule[noise/socket]
-
-@; ------------------------------------------------------------
-@subsection[#:tag "socket-transport"]{Noise Sockets}
-
-The @racketmodname[noise/socket] library provides an implementation
-of @hyperlink["https://noisesocket.org/"]{NoiseSocket}.
-
-Specifically, this library implements revision 2draft (2018-03-04)
-@cite{NoiseSocket}.
+@section[#:tag "socket-transport"]{Noise Sockets}
 
 @defproc[(noise-socket? [v any/c]) boolean?]{
 
@@ -141,42 +137,41 @@ See also @racket[noise-socket<%>].
 
 @definterface[noise-socket<%> ()]{
 
-@defmethod[(get-handshake-hash) bytes?]
+@defmethod[(get-handshake-hash) bytes?]{
+
+Returns a cryptographic hash of the handshake.
+}
+
 @defmethod[(write-message [plaintext bytes?]
                           [padding exact-nonnegative-integer? 0])
-           void?]
-@defmethod[(read-message) bytes?]
+           void?]{
 
+Encrypts a transport message and sends it to the socket's peer.
+
+If @racket[padding] is non-zero, then @racket[padding] random
+bytes of padding are added to the message; they are automatically
+removed by @method[noise-socket<%> read-message].
+
+The length of @racket[plaintext] and @racket[padding] must sum to at
+most @racket[noise-socket-max-plaintext] bytes.
+
+Note that each party has independent messages counters for reading and
+writing. Messages written by one party must be read by the other party
+in the same order; but reading does not affect the write counter, and
+vice versa.
 }
 
-@; ------------------------------------------------------------
-@subsection[#:tag "socket-handshake"]{Noise Socket Handshakes}
+@defmethod[(read-message) bytes?]{
 
-@defproc[(noise-socket-handshake-state? [v any/c]) boolean?]{
+Reads a transport message from the socket's peer and decrypts it,
+returning the plaintext. If the peer added padding, the padding is
+automatically removed.
 
-Returns @racket[#t] if @racket[v] is a Noise socket handshake state,
-@racket[#f] otherwise.
+See the note about message ordering in @method[write-message
+noise-socket<%>].
 
-See also @racket[noise-socket-handshake-state<%>].
+If decryption fails, an exception is raised.
 }
-
-@definterface[noise-socket-handshake-state<%> ()]{
-
-@defmethod[(can-write-message?) boolean?]
-@defmethod[(can-read-message?) boolean?]
-
-@defmethod[(write-handshake-message [negotiation bytes?]
-                                    [noise-payload (or/c bytes? #f)])
-           void?]
-
-@defmethod[(read-handshake-message) (values bytes? bytes)]
-
-@defmethod[(read-handshake-negotiation) bytes?]
-
-@defmethod[(read-handshake-noise [mode (or/c 'decrypt 'try-decrypt 'discard)])
-           (or/c bytes? 'bad 'discarded)]
-
-@defmethod[(get-socket) (or/c #f noise-socket?)]
 
 }
 
@@ -184,15 +179,42 @@ See also @racket[noise-socket-handshake-state<%>].
 @; ------------------------------------------------------------
 @section[#:tag "nls"]{Noise Lingo Sockets (NLS)}
 
-@defmodule[noise/lingo]
+NLS @cite{NLS} defines a negotiation language for handshaking on top
+of NoiseSocket.
 
-@defproc[(noise-lingo-connect [in input-port?] [out output-port?] [config hash?])
+@defproc[(noise-lingo-socket [mode (or/c 'connect 'accept)]
+                             [in input-port?]
+                             [out output-port?]
+                             [config hash?])
          noise-socket?]{
 
-}
+Creates a Noise socket that communicates with its peer using
+@racket[in] and @racket[out]. The socket attempts to perform a
+handshake according to the protocols and key information in
+@racket[config]. If handshaking fails, an exception is raised.
 
-@defproc[(noise-lingo-accept [in input-port?] [out output-port?] [config hash?])
-         noise-socket?]{
+If @racket[mode] is @racket['connect], then the socket initates the
+first handshake attempt, and @racket[config] should have the following
+shape:
+@racketblock[
+(hash 'keys-info keys-info/c
+      'protocols (listof noise-protocol?)
+      'switch-protocols (listof noise-protocol?))
+]
+The socket first attempts a handshake attempt with the first protocol
+in the @racket['protocols] list for which the @racket['keys-info]
+contains the necessary keys; other suitable protocols are used as
+retry options. The @racket['switch-protocols] are listed as switch
+options.
+
+If @racket[mode] is @racket['accept], then the socket waits to respond
+to the first handshake attempt, and @racket[config] should have the
+following shape:
+@racketblock[
+(hash 'keys-info keys-info/c
+      'protocols (listof noise-protocol?)
+      'switch-protocols (listof noise-protocol?))
+]
 
 }
 
