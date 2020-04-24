@@ -188,6 +188,17 @@ Gets a list of pattern extensions.
 (send xx-fallback-proto get-extensions)
 ]}
 
+@defmethod[(get-info-keys [initiator? boolean?]) (listof symbol?)]{
+
+Returns the keys that a key-info hash must have to begin an execution
+of this protocol as an initiator or responder, depending on
+@racket[initiator?].
+
+@examples[#:eval the-eval
+(send ik-proto get-info-keys #t)
+(send xx-fallback-proto get-info-keys #t)
+]}
+
 @defmethod[(using-psk?) boolean?]{
 
 Returns @racket[#t] if the protocol uses the @tt{psk} extension, @racket[#f] otherwise.
