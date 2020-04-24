@@ -4,7 +4,7 @@
          crypto
          crypto/all
          "protocol.rkt"
-         "lingo.rkt")
+         "socket.rkt")
 
 ;;(crypto-factories (list decaf-factory nettle-factory))
 (crypto-factories libcrypto-factory)
@@ -40,8 +40,8 @@
   (hasheq 'keys-info bob-info
           'protocols (list p)))
 
-(define alice-p (delay/thread (noise-lingo-connect ->a a-> alice-config)))
-(define bob (noise-lingo-accept ->b b-> bob-config))
+(define alice-p (delay/thread (noise-lingo-socket 'connect ->a a-> alice-config)))
+(define bob (noise-lingo-socket 'accept ->b b-> bob-config))
 (define alice (force alice-p))
 
 ;; ----

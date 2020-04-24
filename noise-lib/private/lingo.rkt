@@ -577,10 +577,8 @@ It seems out of place to require responder to support all listed Noise protocols
 
 ;; ------------------------------------------------------------
 
-(define (noise-lingo-connect in out config)
+(define (noise-lingo-socket mode in out config)
   (define s (new lingo-handshake-state% (in in) (out out) (config config)))
-  (send s connect))
-
-(define (noise-lingo-accept in out config)
-  (define s (new lingo-handshake-state% (in in) (out out) (config config)))
-  (send s accept))
+  (case mode
+    [(connect) (send s connect)]
+    [(accept) (send s accept)]))

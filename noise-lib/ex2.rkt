@@ -3,7 +3,8 @@
          crypto
          crypto/all
          "protocol.rkt"
-         "socket.rkt")
+         "socket.rkt"
+         (only-in "private/socket.rkt" noise-socket-handshake))
 
 ;;(crypto-factories (list decaf-factory nettle-factory))
 (crypto-factories libcrypto-factory)

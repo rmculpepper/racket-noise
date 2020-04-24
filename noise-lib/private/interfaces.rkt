@@ -152,68 +152,10 @@
     [get-socket (->m (or/c #f noise-socket?))]
     ))
 
-(define lingo-handshake-state<%>
-  (interface ()
-    connect
-    accept
-    ))
-
-
-;; XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-
-(define (noise-lingo-socket? x) (is-a? x lingo-socket<%>))
-
 (define lingo-config/c hash?) ;; FIXME
 
-#|
-(define noise-socket<%>
+(define lingo-handshake-state<%>
   (interface ()
-    [in-handshake-phase? (->m boolean?)]
-    [in-transport-phase? (->m boolean?)]
-    [can-write-message? (->m boolean?)]
-    [can-read-message? (->m boolean?)]
-    ;; ----
-    [get-handshake-hash (->m bytes?)]
-    [write-handshake-message
-     (->m bytes? (or/c bytes? #f) void?)]
-    [read-handshake-message
-     (->m (values bytes? bytes?))]
-    [read-handshake-negotiation
-     (->m bytes?)]
-    [read-handshake-noise
-     (->m (or/c 'decrypt 'try-decrypt 'discard)
-          (or/c bytes? 'bad 'discarded))]
-    [write-transport-message
-     (->*m [bytes?] [exact-nonnegative-integer?] void?)]
-    [read-transport-message
-     (->m bytes?)]
-    ))
-
-(define socket<%>
-  (interface (noise-socket<%>)
-    [initialize
-     (->m (or/c 'init 'retry 'switch)
-          noise-protocol?
-          boolean?
-          info-hash/c
-          void?)]
-    [discard-transcript! (->m void?)]
-    [get-keys-info (->m info-hash/c)]
-    ))
-|#
-
-(define noise-lingo-socket<%>
-  (interface ()
-    [can-write-message? (->m boolean?)]
-    [can-read-message? (->m boolean?)]
-    [get-handshake-hash (->m bytes?)]
-    [write-transport-message
-     (->*m [bytes?] [exact-nonnegative-integer?] void?)]
-    [read-transport-message (->m bytes?)]
-    ))
-
-(define lingo-socket<%>
-  (interface (noise-lingo-socket<%>)
-    [connect (->m lingo-config/c void?)]
-    [accept  (->m lingo-config/c void?)]
+    [connect (->m noise-socket?)]
+    [accept (->m noise-socket?)]
     ))
