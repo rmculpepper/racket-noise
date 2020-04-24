@@ -98,7 +98,7 @@
        (for/fold ([pattern base-pattern]) ([ext (in-list exts)])
          (handshake-pattern-apply-extension pattern ext)))
      (new protocol%
-          (protocol-name (bytes->immutable-bytes (string->bytes/utf-8 protocol-name)))
+          (protocol-name (string->immutable-string protocol-name))
           (extensions (map string->immutable-string exts))
           (crypto crypto) (pattern pattern))]))
 
@@ -146,7 +146,7 @@
 
 (define symmetric-state%
   (class* object% (symmetric-state<%>)
-    (init protocol-name) ;; Bytes
+    (init protocol-name) ;; String
     (init-field crypto)  ;; crypto%
     (super-new)
 
@@ -156,13 +156,13 @@
 
     ;; initialize
     (let ()
-      (define plen (bytes-length protocol-name))
+      (define pname (string->bytes/utf-8 protocol-name))
+      (define plen (bytes-length pname))
       (define HASHLEN (send crypto get-hashlen))
       (set! h
             (cond [(<= plen HASHLEN)
-                   (bytes-append protocol-name (make-bytes (- HASHLEN plen) 0))]
-                  [else
-                   (send crypto digest protocol-name)]))
+                   (bytes-append pname (make-bytes (- HASHLEN plen) 0))]
+                  [else (send crypto digest pname)]))
       (set! ck h))
 
     (define/public (mix-key ikm)

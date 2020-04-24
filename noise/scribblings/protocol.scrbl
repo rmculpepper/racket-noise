@@ -171,7 +171,7 @@ Note that @racket[(noise-protocol? _v)] implies @racket[(is-a? _v
 noise-protocol<%>)], but not vice versa. That is, a Noise protocol
 object implements additional internal interfaces not exposed to users.
 
-@defmethod[(get-protocol-name) bytes?]{
+@defmethod[(get-protocol-name) string?]{
 
 Gets the protocol name.
 

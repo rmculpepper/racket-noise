@@ -21,17 +21,17 @@
 (define NoiseLingoNegotiationDataRequest
   (Message
    [1 server_name 'bytes]
-   [2 initial_protocol 'bytes]
-   #:repeated [3 switch_protocol 'bytes]
-   #:repeated [4 retry_protocol 'bytes]
-   [5 rejected_protocol 'bytes]
+   [2 initial_protocol 'string]
+   #:repeated [3 switch_protocol 'string]
+   #:repeated [4 retry_protocol 'string]
+   [5 rejected_protocol 'string]
    [6 psk_id 'bytes]))
 
 (define NoiseLingoNegotiationDataResponse
   (Message
    #:oneof ;; response
-   [[3 switch_protocol 'bytes]
-    [4 retry_protocol 'bytes]
+   [[3 switch_protocol 'string]
+    [4 retry_protocol 'string]
     [5 rejected 'bool]]))
 
 (define NoiseLingoTransportOptions
