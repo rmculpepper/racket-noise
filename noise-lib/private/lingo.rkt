@@ -293,9 +293,19 @@ It seems out of place to require responder to support all listed Noise protocols
                      (application-prologue application-prologue))]
            [keys-info (hash-ref config 'keys-info '#hasheq())])
 
+    (define party #f)
+    (define/private (debug-message rw mode fmt . args)
+      (when #f
+        (define prefix
+          (case rw
+            [(w) (case party [(A) "A ->"] [(B) "<- B"])]
+            [(r) (case party [(A) "A <-"] [(B) "-> B"])]))
+        (eprintf "~a (~a) : ~a\n" prefix mode (apply format fmt args))))
+
     ;; ========================================
 
     (define/public (connect)
+      (set! party 'A)
       (define-values (protocol ndreq) (config->init-ndreq config keys-info))
       (-connect protocol 'init ndreq))
 
@@ -304,7 +314,7 @@ It seems out of place to require responder to support all listed Noise protocols
       (define mpatterns (send protocol get-message-patterns))
       ;; FIXME: early payload
       (define req-payload (-make-payload protocol mpatterns #t))
-      (eprintf "~s A -> : ~e ; ~e\n" mode ndreq req-payload)
+      (debug-message 'w mode "~e ; ~e" ndreq req-payload)
       (send shs write-handshake-message
             (message->bytes NoiseLingoNegotiationDataRequest ndreq)
             (message->bytes NoiseLingoHandshakePayload req-payload))
@@ -315,7 +325,7 @@ It seems out of place to require responder to support all listed Noise protocols
     (define/private (-connect-k protocol mode)
       ;; FIXME: handle silent rejection better
       (define ndresp (-read-handshake-resp))
-      (eprintf "~s A <- : ~e\n" mode ndresp)
+      (debug-message 'r mode "~e ; ..." ndresp)
       (cond [(equal? ndresp '#hasheq()) ;; ok
              (define payload (-read-handshake-noise 'decrypt))
              (define mpatterns (send protocol get-message-patterns))
@@ -343,9 +353,9 @@ It seems out of place to require responder to support all listed Noise protocols
       (cond [(find-protocol-by-name protocol-name (hash-ref config 'switch-protocols null))
              => (lambda (protocol)
                   (set! keys-info (send shs get-keys-info))
-                  (eprintf "[init A] is now [switch B]\n")
                   (send shs initialize 'switch protocol #f keys-info)
                   (define payload (-read-handshake-noise 'decrypt))
+                  (debug-message 'r 'switch "... ; ~e" payload)
                   (define mpatterns (send protocol get-message-patterns))
                   (-negotiate-k mpatterns payload)
                   (send shs get-socket))]
@@ -369,11 +379,12 @@ It seems out of place to require responder to support all listed Noise protocols
     ;; ========================================
 
     (define/public (accept)
+      (set! party 'B)
       (-accept 'init))
 
     (define/private (-accept mode) ;; mode is (U 'init 'switch 'retry)
       (define ndreq (-read-handshake-req))
-      (eprintf "~s -> B : ~e\n" mode ndreq)
+      (debug-message 'r mode "~e ; ..." ndreq)
       (define protocol-name (hash-ref ndreq 'initial_protocol))
       (cond [(find-protocol-by-name protocol-name (hash-ref config 'protocols null))
              => (lambda (protocol) (-accept/protocol protocol mode ndreq))]
@@ -387,7 +398,7 @@ It seems out of place to require responder to support all listed Noise protocols
     (define/private (-accept/protocol protocol mode ndreq)
       (send shs initialize mode protocol #f keys-info)
       (define payload (-read-handshake-noise 'try-decrypt))
-      (eprintf "~s -> B : ... ; ~e\n" mode payload)
+      (debug-message 'r mode "... ; ~e" payload)
       (cond [(eq? payload 'bad)
              (cond [(eq? mode 'init)
                     (-accept/try-alt ndreq (send protocol get-protocol-name))]
@@ -413,8 +424,8 @@ It seems out of place to require responder to support all listed Noise protocols
       (define mpatterns (send protocol get-message-patterns))
       (define ndresp (hasheq 'switch_protocol (send protocol get-protocol-name)))
       (define payload (-make-payload protocol mpatterns #t)) ;; FIXME??
-      (eprintf "[init B] is now [switch A]\n")
-      (eprintf "~s A -> : ~e ; ~e\n" 'switch ndresp payload)
+      ;;(eprintf "[init B] is now [switch A]\n")
+      (debug-message 'w 'switch "~e ; ~e" ndresp payload)
       (send shs initialize 'switch protocol #t keys-info)
       (send shs write-handshake-message
             (message->bytes NoiseLingoNegotiationDataResponse ndresp)
@@ -441,6 +452,7 @@ It seems out of place to require responder to support all listed Noise protocols
       (define (loop-send mpatterns)
         (when (pair? mpatterns)
           (define payload (-make-payload #f mpatterns #f))
+          (debug-message 'w 'negotiate "{} ; ~e" payload)
           (send shs write-handshake-message
                 #"" (message->bytes NoiseLingoHandshakePayload payload))
           (loop-recv (cdr mpatterns))))
@@ -449,6 +461,7 @@ It seems out of place to require responder to support all listed Noise protocols
           (define-values (nego-bs payload-bs) (send shs read-handshake-message))
           (unless (equal? nego-bs #"") (error 'connect "unexpected negotiation data"))
           (define payload (bytes->message NoiseLingoHandshakePayload payload-bs))
+          (debug-message 'r 'negotiate "{} ; ~e" payload)
           (loop-recv* mpatterns payload)))
       (define (loop-recv* mpatterns payload [first? #f])
         (-parse-payload! mpatterns payload first?)

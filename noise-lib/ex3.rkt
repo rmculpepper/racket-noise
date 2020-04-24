@@ -41,8 +41,9 @@
           'protocols (list p)))
 
 (define alice-p (delay/thread (noise-lingo-socket 'connect ->a a-> alice-config)))
-(define bob (noise-lingo-socket 'accept ->b b-> bob-config))
+(define bob-p (delay/thread (noise-lingo-socket 'accept ->b b-> bob-config)))
 (define alice (force alice-p))
+(define bob (force bob-p))
 
 ;; ----
 
