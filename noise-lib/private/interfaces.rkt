@@ -109,6 +109,7 @@
   (interface ()
     [get-protocol-name (->m bytes?)]
     [get-extensions (->m (listof string?))]
+    [get-info-keys (->m boolean? (listof symbol?))]
     [using-psk? (->m boolean?)]
     [generate-private-key (->m private-key?)]
     [pk->public-bytes (->m pk-key? bytes?)]

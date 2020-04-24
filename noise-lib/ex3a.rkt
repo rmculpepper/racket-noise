@@ -35,8 +35,7 @@
 
 (define alice-config
   (hasheq 'keys-info alice-info
-          'initial-protocol init-p
-          'retry-protocols (list alt-p)))
+          'protocols (list init-p alt-p)))
 
 (define bob-config
   (hasheq 'keys-info bob-info

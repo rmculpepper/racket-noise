@@ -34,7 +34,7 @@
 
 (define alice-config
   (hasheq 'keys-info alice-info
-          'initial-protocol p))
+          'protocols (list p)))
 
 (define bob-config
   (hasheq 'keys-info bob-info

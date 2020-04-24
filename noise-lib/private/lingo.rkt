@@ -247,20 +247,19 @@ It seems out of place to require responder to support all listed Noise protocols
 ;; - keys-info : Info
 ;; - s-evidence: ...
 
-(define (config->init-ndreq config)
+(define (config->init-ndreq config keys-info)
   (define (protocol->name p) (send p get-protocol-name))
-  (for/fold ([ndreq (config->base-ndreq config)])
-            ([(k v) (in-hash config)])
-    (case k
-      [(initial-protocol)
-       (hash-set ndreq 'initial_protocol (protocol->name v))]
-      [(switch-protocols)
-       (hash-set ndreq 'switch_protocol (map protocol->name v))]
-      [(retry-protocols)
-       (hash-set ndreq 'retry_protocol (map protocol->name v))]
-      [(rejected-protocol)
-       (if v (hash-set ndreq 'rejected-protocol (protocol->name v)) ndreq)]
-      [else ndreq])))
+  (define ok-protocols
+    (filter (protocol-ok-for-keys? keys-info #t)
+            (hash-ref config 'protocols null)))
+  (unless (pair? ok-protocols)
+    (error 'connect "no protocols possible with given keys-info"))
+  (values
+   (car ok-protocols)
+   (hash-set* (config->base-ndreq config)
+              'initial_protocol (protocol->name (car ok-protocols))
+              'retry_protocol (map protocol->name (cdr ok-protocols))
+              'switch_protocol (map protocol->name (hash-ref config 'switch-protocols null)))))
 
 (define (config->switch-ndreq config switch-protocol)
   (define ndreq0 (config->base-ndreq config))
@@ -276,6 +275,10 @@ It seems out of place to require responder to support all listed Noise protocols
       [(server-name)
        (if v (hash-set ndreq 'server_name v) ndreq)]
       [else ndreq])))
+
+(define ((protocol-ok-for-keys? keys-info initiator?) protocol)
+  (for/and ([key (in-list (send protocol get-info-keys initiator?))])
+    (hash-has-key? keys-info key)))
 
 ;; ----------------------------------------
 
@@ -293,8 +296,7 @@ It seems out of place to require responder to support all listed Noise protocols
     ;; ========================================
 
     (define/public (connect)
-      (define protocol (hash-ref config 'initial-protocol))
-      (define ndreq (config->init-ndreq config))
+      (define-values (protocol ndreq) (config->init-ndreq config keys-info))
       (-connect protocol 'init ndreq))
 
     (define/private (-connect protocol mode ndreq)
@@ -353,7 +355,7 @@ It seems out of place to require responder to support all listed Noise protocols
 
     (define/private (-connect/retry retry-protocol-name)
       (define protocol
-        (for/or ([p (in-list (hash-ref config 'retry-protocols null))])
+        (for/or ([p (in-list (hash-ref config 'protocols null))])
           (and (equal? (send p get-protocol-name) retry-protocol-name) p)))
       (unless protocol
         (error 'connect "peer requested unsupported retry protocol\n  protocol: ~e"
