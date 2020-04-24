@@ -33,12 +33,21 @@
         (regexp-match? #rx"^psk[0-9]+$" ext)))
 
     (define/public (get-info-keys initiator?)
-      (append*
-       (for/list ([mp (in-list (handshake-pattern-pre pattern))])
-         (define self? (eq? (message-pattern-dir mp) (if initiator? '-> '<-)))
-         (for/list ([tok (in-list (message-pattern-tokens mp))])
-           (or (if self? (pre-token->self-key tok) (pre-token->peer-key tok))
-               (error 'get-info-keys "INTERNAL ERROR: invalid pre-message token: ~e" tok))))))
+      (define h (make-hasheq))
+      (for ([mp (in-list (handshake-pattern-pre pattern))])
+        (define self? (eq? (message-pattern-dir mp) (if initiator? '-> '<-)))
+        (for ([tok (in-list (message-pattern-tokens mp))])
+          (define k
+            (or (if self? (pre-token->self-key tok) (pre-token->peer-key tok))
+                (error 'get-info-keys "INTERNAL ERROR: invalid pre-message token: ~e" tok)))
+          (hash-set! h k #t)))
+      (for ([mp (in-list (handshake-pattern-msgs pattern))]
+            #:when (eq? (message-pattern-dir mp) (if initiator? '-> '<-))
+            [tok (in-list (message-pattern-tokens mp))])
+        (case tok
+          [(s psk) (hash-set! h tok #t)]
+          [else (void)]))
+      (sort (hash-keys h) symbol<?))
 
     (define/public (check-info-keys who initiator? info)
       ;; PRE: info keys, if present, have correct values (see info-hash/c)
