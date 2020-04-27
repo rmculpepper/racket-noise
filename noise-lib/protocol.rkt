@@ -9,6 +9,7 @@
          noise-handshake-state<%>
          noise-transport?
          noise-transport<%>
+         noise-keys-info/c
          (contract-out
           [noise-protocol
            (->* [string?] [#:factories (listof crypto-factory?)]

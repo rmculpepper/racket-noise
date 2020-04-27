@@ -15,12 +15,12 @@
 
 (define handshake-end/c any/c) ;; FIXME
 
-;; info-hash/c does NOT check the following:
+;; noise-keys-info/c does NOT check the following:
 ;; - private-keys are right kind
 ;; - right keys are present
 ;; FIXME: maybe parameterize over key type, key set?
 
-(define info-hash/c
+(define noise-keys-info/c
   (hash/dc [k symbol?]
            [v (k)
               (case k
@@ -89,7 +89,7 @@
 
 (define handshake-state<%>
   (interface (noise-handshake-state<%>)
-    [get-keys-info (->m info-hash/c)]
+    [get-keys-info (->m noise-keys-info/c)]
     ))
 
 (define noise-transport<%>
@@ -120,7 +120,7 @@
     [get-crypto (->m (is-a?/c crypto<%>))]
     [get-pattern (->m handshake-pattern?)]
     [new-handshake
-     (->*m [boolean? info-hash/c]
+     (->*m [boolean? noise-keys-info/c]
            [#:prologue bytes?]
            noise-handshake-state?)]
     ))
@@ -130,6 +130,18 @@
 ;; Mapping names to Noise specs
 ;; - noise-socket<%> represents a Noise Socket in transport phase
 ;; - noise-socket-handshake<%> handles handshake phase
+
+(define noise-socket-config/c
+  (hash/dc [k symbol?]
+           [v (k)
+              (case k
+                [(keys-info) noise-keys-info/c]
+                [(protocols switch-protocols) (listof noise-protocol?)]
+                ;; [(s-evidence) any/c]
+                [(psk_id) bytes?]
+                [(transport_options) hash?]
+                [else none/c])]
+           #:immutable #t))
 
 (define (noise-socket? x) (is-a? x socket<%>))
 (define (noise-socket-handshake-state? x) (is-a? x socket-handshake-state<%>))
