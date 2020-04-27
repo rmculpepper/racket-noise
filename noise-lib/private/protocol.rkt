@@ -279,8 +279,8 @@
     (define/private (get-psk)
       (cond [(hash-ref info 'psk #f)
              => (lambda (psk)
-                  (cond [(procedure? psk) (psk rs)]
-                        [else psk]))]
+                  (cond [(procedure? psk) (psk info)]
+                        [(bytes? psk) psk]))]
             [else #f]))
 
     ;; --------------------

@@ -268,12 +268,16 @@ party's public ephemeral key, respectively. These are generally only
 used in @tt{fallback} protocol for compound handshakes, since
 ephemeral keys should not be reused for multiple conversations.}
 
-@item{@racket['psk] : @racket[(-> ??? bytes?)] --- a function that
-produces a @emph{pre-shared key}}
+@item{@racket['psk] : @racket[(or/c bytes? (-> noise-keys-info/c (or/c bytes? #f)))]
+--- a @emph{pre-shared key} or a function that retrieves a pre-shared key
+given the current keys-info hash. For example, the function might use
+the remote party's static public key (@racket['rs]) as an identifier
+to look up the pre-shared key. A pre-shared key must be exactly 32
+bytes long. Pre-shared keys are only used in protocols with a
+@tt{psk{n}} extension.}
 
 ]
 }
-
 
 
 @; ------------------------------------------------------------

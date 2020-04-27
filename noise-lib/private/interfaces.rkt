@@ -26,7 +26,7 @@
               (case k
                 [(s e) private-key?]
                 [(rs re) pub-key-bytes/c]
-                [(psk) (or/c bytes? (-> pub-key-bytes/c key-bytes/c))]
+                [(psk) (or/c key-bytes/c (-> noise-keys-info/c (or/c key-bytes/c #f)))]
                 [else none/c])]
            #:immutable #t))
 
