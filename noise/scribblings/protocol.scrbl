@@ -58,10 +58,18 @@ IK:
     <- e, ee, se
 }
 
-See @cite{Noise} for the interpretation of handshake patterns. The
-important information for this example is the first line, a
-pre-message, which says that the initiator must know the responder's
-static public key.
+See @cite{Noise} for an explanation of handshake patterns. The
+important facts for this example are that both parties must have a
+static private key, and that the initiator must already know the
+responder's public key before the handshake starts. We can get this
+information automatically using @method[noise-protocol<%>
+get-info-keys] (@racket['s] means own static key, @racket['rs] means
+remote static key):
+
+@examples[#:eval the-eval #:label #f
+(code:line (send ik-proto get-info-keys #t) (code:comment "#t = initiator"))
+(code:line (send ik-proto get-info-keys #f) (code:comment "#f = responder"))
+]
 
 Let's call the initiator Alice and the responder Bob. We create
 private keys for Alice and Bob, and we also extract Bob's public key
@@ -82,19 +90,19 @@ knows his own static private key (@racket['s] has @racket[bob-sk]).
 
 @examples[#:eval the-eval #:label #f
 (define alice-hs
-  (send ik-proto new-handshake #t (hasheq 's alice-sk 'rs bob-pub)))
+  (send ik-proto new-handshake #t (hash 's alice-sk 'rs bob-pub)))
 (define bob-hs
-  (send ik-proto new-handshake #f (hasheq 's bob-sk)))
+  (send ik-proto new-handshake #f (hash 's bob-sk)))
 ]
 
 An @tt{IK} handshake consists of two messages.
 
 Alice sends the first handshake message to Bob, which consists of the
-handshake elements @tt{e, s, es, s, ss} and the payload
-@racket["hello"]. Note that the handshake state object do not do
-communication. The result of ``writing'' the first message is a byte
-string, @racket[msg1]. Bob ``reads'' @racket[msg1], parses and
-interprets the handshake elements, and returns the payload.
+handshake elements @tt{e, s, es, s, ss} and a payload. Note that the
+handshake state object do not do communication. The result of
+``writing'' the first message is a byte string, @racket[msg1]. Bob
+``reads'' @racket[msg1], parses and interprets the handshake elements,
+and returns the payload.
 
 @examples[#:eval the-eval #:label #f
 (define msg1 (send alice-hs write-handshake-message #"hello"))
@@ -109,9 +117,9 @@ Bob sends the second handshake message:
 ]
 
 The @tt{IK} handshake pattern consists of only two message, so the
-handshake is complete, and the secure transport channel is
-established. Alice and Bob can retrieve the transport channel objects
-using @method[noise-handshake-state<%> get-transport]:
+handshake is complete, and the transport channel is established. Alice
+and Bob can retrieve the transport channel objects using
+@method[noise-handshake-state<%> get-transport]:
 
 @examples[#:eval the-eval #:label #f
 (define alice-t (send alice-hs get-transport))
@@ -136,7 +144,7 @@ Bob's message depends on the content of Alice's).
 
 Noise protocol conversations are never finished, only abandoned. (That
 is, higher-level protocols may define a notion of termination, but
-Noise does not.)
+the Noise protocol layer does not.)
 
 
 @; ------------------------------------------------------------
@@ -230,12 +238,42 @@ Creates a new Noise protocol state, representing one party in an
 execution of a Noise protocol. If @racket[initiator?] is true, then
 the party is the initiator; otherwise it represents the responder. The
 @racket[keys-info] hash provides the keys known to the party at the
-beginning of the protocol; see @secref["keys-info"] for details. The
+beginning of the protocol; see @racket[keys-info/c] for details. The
 @racket[prologue] represents information shared between the parties; a
 protocol execution fails if the two parties have different prologues.
 }
 
 }
+
+@defthing[noise-keys-info/c contract?]{
+
+Different Noise protocols require parties to possess different
+information (mainly cryptographic keys) to perform a handshake, and
+extensions can define new kinds of information. For flexibility, this
+library accepts information in the form of @deftech{keys-info hash}
+--- an immutable hash with the following allowed keys:
+
+@itemlist[
+
+@item{@racket['s] : @racket[private-key?] --- the party's private
+static DH key}
+
+@item{@racket['rs] : @racket[bytes?] --- the remote party's (aka
+peer's) public static key, in bytes string form (see also
+@method[noise-protocol<%> pk-key->public-bytes]).}
+
+@item{@racket['e] : @racket[private-key?] and @racket['re] :
+@racket[bytes?] --- the party's private ephemeral key and the remote
+party's public ephemeral key, respectively. These are generally only
+used in @tt{fallback} protocol for compound handshakes, since
+ephemeral keys should not be reused for multiple conversations.}
+
+@item{@racket['psk] : @racket[(-> ??? bytes?)] --- a function that
+produces a @emph{pre-shared key}}
+
+]
+}
+
 
 
 @; ------------------------------------------------------------
@@ -355,12 +393,6 @@ If decryption fails, an exception is raised.
 }
 
 }
-
-
-@; ------------------------------------------------------------
-@section[#:tag "keys-info"]{Keys Info}
-
-
 
 
 @; ------------------------------------------------------------

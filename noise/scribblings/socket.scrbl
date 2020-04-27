@@ -185,7 +185,7 @@ of NoiseSocket.
 @defproc[(noise-lingo-socket [mode (or/c 'connect 'accept)]
                              [in input-port?]
                              [out output-port?]
-                             [config hash?])
+                             [config noise-socket-config/c])
          noise-socket?]{
 
 Creates a Noise socket that communicates with its peer using
@@ -194,30 +194,50 @@ handshake according to the protocols and key information in
 @racket[config]. If handshaking fails, an exception is raised.
 
 If @racket[mode] is @racket['connect], then the socket initates the
-first handshake attempt, and @racket[config] should have the following
-shape:
-@racketblock[
-(hash 'keys-info keys-info/c
-      'protocols (listof noise-protocol?)
-      'switch-protocols (listof noise-protocol?))
-]
-The socket first attempts a handshake attempt with the first protocol
-in the @racket['protocols] list for which the @racket['keys-info]
-contains the necessary keys; other suitable protocols are used as
-retry options. The @racket['switch-protocols] are listed as switch
-options.
+first handshake attempt. The @racket['protocols] value of
+@racket[config] is filtered, discarding protocols for which the given
+@racket['keys-info] value is insufficient; the first suitable protocol
+is used as the initial protocol, and the remaining suitable protocols
+are offered as retry protocols. The @racket['switch-protocols] are
+offered as as switch options.
 
 If @racket[mode] is @racket['accept], then the socket waits to respond
-to the first handshake attempt, and @racket[config] should have the
-following shape:
-@racketblock[
-(hash 'keys-info keys-info/c
-      'protocols (listof noise-protocol?)
-      'switch-protocols (listof noise-protocol?))
-]
-
+to the first handshake attempt. If the initial protocol appears in the
+@racket['protocols] value of @racket[config], it is accepted and
+handshaking continues. Otherwise, if the initial handshake offered a
+switch protocol that appears in @racket[config]'s
+@racket['switch-protocols] value, this party switches to that protocol
+and initiates a new handshake. Otherwise, if the initial handshake
+offered a retry protocol that appears in @racket[config]'s
+@racket['protocols] value, this party sends a message advising the
+initiator to retry with that protocol. Otherwise, the connection is
+rejected.
 }
 
+@defthing[noise-socket-config/c contract?]{
+
+An immutable hash with the following allowed keys:
+
+@itemlist[
+
+@item{@racket['keys-info] : @racket[noise-keys-info/c] --- contains
+the party's cryptographic keys (and potentially other information
+needed for handshaking)}
+
+@item{@racket['protocols] : @racket[(listof noise-protocol?)] --- the
+protocols that the party can use for initial or retry handshakes, in
+order of preference (see @racket[noise-lingo-socket])}
+
+@item{@racket['switch-protocols] : @racket[(listof noise-protocol?)]
+--- the protocols that the party can use for switch handshakes, in
+order of preference}
+
+@; @item{@racket['transport_options] : @racket[???] --- FIXME}
+@; @item{@racket['psk_id] : @racket[bytes?] --- FIXME}
+@; @item{@racket['s-evidence] : @racket[???] --- FIXME}
+
+]
+}
 
 @; ------------------------------------------------------------
 
