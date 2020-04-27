@@ -503,7 +503,7 @@ It seems out of place to require responder to support all listed Noise protocols
       ;; fields sent on my first message
       (when first?
         (cond [(and (send protocol using-psk?)
-                    (hash-ref config 'psk_id #f))
+                    (hash-ref keys-info 'psk-id #f))
                => (lambda (v) (hash-set! payload-h 'psk_id v))]))
       ;; fields sent on my last message (note: last could also be first!)
       (when (null? rest-mpatterns)
@@ -531,7 +531,7 @@ It seems out of place to require responder to support all listed Noise protocols
       (when first?
         (cond [(hash-ref/not-default payload 'psk_id #"")
                => (lambda (v)
-                    (set! config (hash-set config 'peer:psk-id v)))]))
+                    (set! keys-info (hash-set keys-info 'psk-id v)))]))
       ;; fields sent on peer's last message (note: last could also be first!)
       (when (null? rest-mpatterns)
         (cond [(hash-ref payload 'transport_options #f)

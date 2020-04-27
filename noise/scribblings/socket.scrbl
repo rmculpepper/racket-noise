@@ -233,7 +233,6 @@ order of preference (see @racket[noise-lingo-socket])}
 order of preference}
 
 @; @item{@racket['transport_options] : @racket[???] --- FIXME}
-@; @item{@racket['psk_id] : @racket[bytes?] --- FIXME}
 @; @item{@racket['s-evidence] : @racket[???] --- FIXME}
 
 ]

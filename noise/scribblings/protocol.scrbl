@@ -276,6 +276,9 @@ to look up the pre-shared key. A pre-shared key must be exactly 32
 bytes long. Pre-shared keys are only used in protocols with a
 @tt{psk{n}} extension.}
 
+@item{@racket['psk-id] : @racket[bytes?] --- an identifier for the
+pre-shared key}
+
 ]
 }
 

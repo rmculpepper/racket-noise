@@ -27,6 +27,7 @@
                 [(s e) private-key?]
                 [(rs re) pub-key-bytes/c]
                 [(psk) (or/c key-bytes/c (-> noise-keys-info/c (or/c key-bytes/c #f)))]
+                [(psk-id) bytes?]
                 [else none/c])]
            #:immutable #t))
 
@@ -138,7 +139,6 @@
                 [(keys-info) noise-keys-info/c]
                 [(protocols switch-protocols) (listof noise-protocol?)]
                 ;; [(s-evidence) any/c]
-                [(psk_id) bytes?]
                 [(transport_options) hash?]
                 [else none/c])]
            #:immutable #t))
